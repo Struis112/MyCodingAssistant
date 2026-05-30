@@ -79,9 +79,15 @@ function attachEventForwarder(
       inTurn = false;
       const empty = counts.text === 0 && counts.thinking === 0 && counts.toolStart === 0;
       if (empty) {
-        console.warn(
-          `[WS] WARN sid=${sessionId} assistant message ended with 0 text / 0 thinking / 0 tool events — likely an invalid model or empty model response`,
-        );
+        // Look up the current model so the surfaced error is actionable.
+        const current = piSessionManager.getSession(sessionId);
+        const modelId = current?.model?.id ?? "<unset>";
+        const provider = current?.model?.provider ?? "<unset>";
+        const detail = `The model returned no content (0 text / 0 thinking / 0 tool events for this turn). Active model: ${provider}/${modelId}. This usually means the model id is a registry alias the upstream provider doesn't actually serve — try a different model in Settings.`;
+        console.warn(`[WS] WARN sid=${sessionId} ${detail}`);
+        // Tell the frontend so the user sees it in the chat as a system
+        // item instead of staring at an empty assistant bubble.
+        io.to(room).emit("chat:error", { sessionId, error: detail });
       } else if (debug) {
         console.log(
           `[WS] turn done sid=${sessionId} text=${counts.text} thinking=${counts.thinking} tools=${counts.toolStart}/${counts.toolEnd}`,
@@ -142,14 +148,19 @@ export function registerWebSocketHandlers(
           attachEventForwarder(io, piSessionManager, sessionId);
           const session = piSessionManager.getSession(sessionId)!;
 
-          // Pi SDK expects images in `ImageContent` shape. The shape is
-          // documented in the SDK as { type: 'image', source: { type: 'base64',
-          // mediaType, data } }. We build it as `any` to avoid pulling the
+          // Pi SDK's ImageContent (from pi-ai/types.ts) is FLAT:
+          //   { type: "image", data: string /* base64 */, mimeType: string }
+          // Earlier code here built the Anthropic-raw shape
+          //   { type: "image", source: { type: "base64", mediaType, data } }
+          // which the SDK silently drops — every image attachment ever sent
+          // through this chat produced a 0-event empty assistant turn. Use
+          // the documented flat shape; cast to `any` to avoid pulling the
           // SDK's narrow MediaType union (which would reject arbitrary mime
           // strings users could drop in).
           const sdkImages = (images || []).map((img) => ({
             type: "image",
-            source: { type: "base64", mediaType: img.mediaType, data: img.data },
+            data: img.data,
+            mimeType: img.mediaType,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           })) as any;
 
