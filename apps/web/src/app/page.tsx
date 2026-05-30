@@ -106,16 +106,6 @@ export default function HomePage() {
                 <ChevronRight className="w-5 h-5" />
               </Link>
             </div>
-              <Link
-                href="https://github.com/Struis112/MyCodingAssistant"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 px-8 py-4 border border-border rounded-lg font-semibold hover:bg-accent transition-colors"
-              >
-                <Github className="w-5 h-5" />
-                View on GitHub
-              </Link>
-            </div>
           </div>
 
           {/* Feature highlights */}
