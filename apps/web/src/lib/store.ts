@@ -1,7 +1,7 @@
 // Global state management with Zustand
 import { create } from 'zustand';
 
-export type View = 'chat' | 'dashboard' | 'settings' | 'avatar' | 'camera';
+export type View = 'chat' | 'dashboard' | 'settings' | 'avatar' | 'camera' | 'logs';
 
 export interface Message {
   id: string;

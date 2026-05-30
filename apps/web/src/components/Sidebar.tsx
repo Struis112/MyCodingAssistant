@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { cn } from '@/lib/utils';
-import { MessageSquare, LayoutDashboard, Settings as SettingsIcon, Bot, Wifi, WifiOff, Camera } from 'lucide-react';
+import { MessageSquare, LayoutDashboard, Settings as SettingsIcon, Bot, Wifi, WifiOff, Camera, ScrollText } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 const navItems = [
@@ -12,6 +12,7 @@ const navItems = [
   { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { id: 'avatar', icon: Bot, label: 'Avatar' },
   { id: 'camera', icon: Camera, label: 'Camera' },
+  { id: 'logs', icon: ScrollText, label: 'Logs' },
   { id: 'settings', icon: SettingsIcon, label: 'Settings' },
 ] as const;
 

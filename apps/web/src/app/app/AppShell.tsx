@@ -5,6 +5,7 @@ import { Dashboard } from '@/components/Dashboard';
 import { Settings } from '@/components/Settings';
 import { AvatarView } from '@/components/AvatarView';
 import { CameraView } from '@/components/CameraView';
+import { LogsViewer } from '@/components/LogsViewer';
 import { Sidebar } from '@/components/Sidebar';
 import { useAppStore } from '@/lib/store';
 
@@ -23,6 +24,7 @@ export function AppShell() {
         {activeView === 'settings' && <Settings />}
         {activeView === 'avatar' && <AvatarView />}
         {activeView === 'camera' && <CameraView />}
+        {activeView === 'logs' && <LogsViewer />}
       </main>
     </div>
   );
