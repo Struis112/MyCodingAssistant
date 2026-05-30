@@ -1,7 +1,7 @@
 // Global state management with Zustand
 import { create } from 'zustand';
 
-export type View = 'chat' | 'dashboard' | 'settings' | 'avatar' | 'camera' | 'logs' | 'sessions';
+export type View = 'chat' | 'sessions' | 'settings';
 
 // ----- Chat items -----
 //
@@ -37,19 +37,6 @@ export type ChatItem =
       timestamp: number;
     }
   | { kind: 'system'; id: string; text: string; timestamp: number };
-
-export interface ServiceStatus {
-  name: string;
-  status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-  pid?: number;
-  uptime?: number;
-  restartCount: number;
-  enabled: boolean;
-  cpu?: number;
-  memory?: number;
-  port?: number;
-  lastError?: string;
-}
 
 export interface ModelInfo {
   id: string;
@@ -98,22 +85,15 @@ interface AppState {
   currentModel: ModelInfo | null;
   setCurrentModel: (model: ModelInfo | null) => void;
 
-  // Services
-  services: ServiceStatus[];
-  setServices: (services: ServiceStatus[]) => void;
-  updateService: (name: string, status: Partial<ServiceStatus>) => void;
-
   // Connection
   isConnected: boolean;
   setIsConnected: (connected: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  // View
   activeView: 'chat',
   setActiveView: (view) => set({ activeView: view }),
 
-  // Chat items
   items: [],
   addItem: (item) => set((state) => ({ items: [...state.items, item] })),
   updateItem: (id, update) =>
@@ -129,29 +109,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   isStreaming: false,
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 
-  // Session
   sessionId: 'default',
   setSessionId: (id) => set({ sessionId: id }),
   sessionFile: undefined,
   setSessionFile: (path) => set({ sessionFile: path }),
 
-  // Persisted session list
   persistedSessions: [],
   setPersistedSessions: (sessions) => set({ persistedSessions: sessions }),
 
-  // Model
   currentModel: null,
   setCurrentModel: (model) => set({ currentModel: model }),
 
-  // Services
-  services: [],
-  setServices: (services) => set({ services }),
-  updateService: (name, status) =>
-    set((state) => ({
-      services: state.services.map((s) => (s.name === name ? { ...s, ...status } : s)),
-    })),
-
-  // Connection
   isConnected: false,
   setIsConnected: (connected) => set({ isConnected: connected }),
 }));

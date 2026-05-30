@@ -4,16 +4,19 @@ import { useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { cn } from '@/lib/utils';
-import { MessageSquare, LayoutDashboard, Settings as SettingsIcon, Bot, Wifi, WifiOff, Camera, ScrollText, FolderOpen } from 'lucide-react';
+import {
+  MessageSquare,
+  FolderOpen,
+  Settings as SettingsIcon,
+  Bot,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 const navItems = [
   { id: 'chat', icon: MessageSquare, label: 'Chat' },
   { id: 'sessions', icon: FolderOpen, label: 'Sessions' },
-  { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { id: 'avatar', icon: Bot, label: 'Avatar' },
-  { id: 'camera', icon: Camera, label: 'Camera' },
-  { id: 'logs', icon: ScrollText, label: 'Logs' },
   { id: 'settings', icon: SettingsIcon, label: 'Settings' },
 ] as const;
 
@@ -22,12 +25,9 @@ export function Sidebar() {
 
   useEffect(() => {
     const socket = getSocket();
-
     socket.on('connect', () => setIsConnected(true));
     socket.on('disconnect', () => setIsConnected(false));
-
     connectSocket();
-
     return () => {
       socket.off('connect');
       socket.off('disconnect');
@@ -35,17 +35,12 @@ export function Sidebar() {
   }, [setIsConnected]);
 
   return (
-    <aside
-      className={cn(
-        'w-16 border-r border-border flex flex-col items-center py-4 gap-2 transition-colors bg-background'
-      )}
-    >
+    <aside className="w-16 border-r border-border flex flex-col items-center py-4 gap-2 bg-background transition-colors">
       {/* Logo */}
       <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-4 bg-primary/20">
         <Bot className="w-6 h-6 text-primary" />
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 flex flex-col gap-2">
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -69,10 +64,8 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Theme toggle */}
       <ThemeToggle />
 
-      {/* Connection status */}
       <div className="flex flex-col items-center gap-1 mt-2">
         {isConnected ? (
           <Wifi className="w-5 h-5 text-success" aria-label="Connected" />

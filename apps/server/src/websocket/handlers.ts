@@ -5,7 +5,6 @@
 
 import type { Server as SocketIOServer, Socket } from 'socket.io';
 import type { PiSessionManager } from '../services/pi-session.js';
-import type { ServiceManager } from '../services/service-manager.js';
 
 type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -18,15 +17,13 @@ function attachEventForwarder(
   piSessionManager: PiSessionManager,
   sessionId: string
 ): void {
-  // Don't double-subscribe.
   if (eventSubscribers.has(sessionId)) return;
-
   const session = piSessionManager.getSession(sessionId);
   if (!session) return;
 
   const unsubscribe = session.subscribe((event) => {
-    // Broadcast to all sockets so multiple browsers can observe the same
-    // session. In practice we expect one tab, but this is the right default.
+    // Broadcast to all sockets so a reloaded tab still receives events for
+    // its session. In practice we expect one tab, but this is the right default.
     io.emit('chat:event', { sessionId, event });
   });
 
@@ -47,8 +44,7 @@ function detachEventForwarder(sessionId: string): void {
 
 export function registerWebSocketHandlers(
   io: SocketIOServer,
-  piSessionManager: PiSessionManager,
-  serviceManager: ServiceManager
+  piSessionManager: PiSessionManager
 ): void {
   io.on('connection', (socket: Socket) => {
     console.log(`[WS] Client connected: ${socket.id}`);
@@ -87,15 +83,12 @@ export function registerWebSocketHandlers(
           }
 
           await session.prompt(message);
-          // io.emit so the completion notice survives a browser reload
-          // mid-stream (a new tab still gets chat:done).
           io.emit('chat:done', { sessionId });
           console.log(`[WS] chat:done sid=${sessionId}`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[WS] chat:send FAILED sid=${sessionId}:`, msg);
           io.emit('chat:error', { sessionId, error: msg });
-          // Always un-stick the UI even on failure.
           io.emit('chat:done', { sessionId });
         }
       }
@@ -124,13 +117,13 @@ export function registerWebSocketHandlers(
         await piSessionManager.newSession(data.sessionId);
         attachEventForwarder(io, piSessionManager, data.sessionId);
         const session = piSessionManager.getSession(data.sessionId)!;
-        socket.emit('chat:new', {
+        io.emit('chat:new', {
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
         });
       } catch (err) {
-        socket.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
+        io.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
       }
     });
 
@@ -142,15 +135,14 @@ export function registerWebSocketHandlers(
           await piSessionManager.resumeSession(data.sessionId, data.sessionFile);
           attachEventForwarder(io, piSessionManager, data.sessionId);
           const session = piSessionManager.getSession(data.sessionId)!;
-          // Send a snapshot of the resumed conversation so the UI rehydrates.
-          socket.emit('chat:resumed', {
+          io.emit('chat:resumed', {
             sessionId: data.sessionId,
             sessionFile: session.sessionFile,
             piSessionId: session.sessionId,
             messages: session.messages,
           });
         } catch (err) {
-          socket.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
+          io.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
         }
       }
     );
@@ -195,17 +187,13 @@ export function registerWebSocketHandlers(
       'session:setModel',
       async (data: { sessionId: string; provider: string; modelId: string }) => {
         try {
-          // Make sure a session exists so setModel has somewhere to land.
           await piSessionManager.getOrCreateSession(data.sessionId);
           const model = await piSessionManager.setSessionModel(
             data.sessionId,
             data.provider,
             data.modelId
           );
-          socket.emit('session:modelChanged', {
-            sessionId: data.sessionId,
-            model,
-          });
+          io.emit('session:modelChanged', { sessionId: data.sessionId, model });
           console.log(`[WS] Model set: ${data.provider}/${data.modelId}`);
         } catch (err) {
           socket.emit('session:error', { error: String(err) });
@@ -219,7 +207,7 @@ export function registerWebSocketHandlers(
         try {
           await piSessionManager.getOrCreateSession(data.sessionId);
           piSessionManager.setSessionThinkingLevel(data.sessionId, data.level);
-          socket.emit('session:thinkingLevelChanged', {
+          io.emit('session:thinkingLevelChanged', {
             sessionId: data.sessionId,
             level: data.level,
           });
@@ -229,46 +217,8 @@ export function registerWebSocketHandlers(
       }
     );
 
-    // ----- Services -----
-
-    socket.on('services:list', () => {
-      socket.emit('services:status', serviceManager.getStatus());
-    });
-
-    socket.on('services:start', async (data: { name: string }) => {
-      try {
-        await serviceManager.startService(data.name);
-        io.emit('services:status', serviceManager.getStatus());
-      } catch (err) {
-        socket.emit('services:error', { name: data.name, error: String(err) });
-      }
-    });
-
-    socket.on('services:stop', async (data: { name: string }) => {
-      try {
-        await serviceManager.stopService(data.name);
-        io.emit('services:status', serviceManager.getStatus());
-      } catch (err) {
-        socket.emit('services:error', { name: data.name, error: String(err) });
-      }
-    });
-
-    socket.on('services:restart', async (data: { name: string }) => {
-      try {
-        await serviceManager.restartService(data.name);
-        io.emit('services:status', serviceManager.getStatus());
-      } catch (err) {
-        socket.emit('services:error', { name: data.name, error: String(err) });
-      }
-    });
-
     socket.on('disconnect', () => {
       console.log(`[WS] Client disconnected: ${socket.id}`);
     });
-  });
-
-  // Forward service status changes to all clients
-  serviceManager.on('service:status', (status) => {
-    io.emit('services:update', status);
   });
 }

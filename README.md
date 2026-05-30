@@ -1,105 +1,68 @@
 # MyCodingAssistant
 
-> Self-learning AI coding assistant with microservice architecture
+Local web chat UI on top of the Pi coding-agent SDK.
 
-A locally-hosted AI coding assistant that runs unmanaged with self-healing capabilities, learns and improves continuously, and provides a comprehensive web dashboard for monitoring and control.
+A Next.js + React frontend talks to an Express + Socket.IO backend which
+wraps `@earendil-works/pi-coding-agent` in-process. Streaming text, thinking
+blocks, and tool executions all render live in the chat. Sessions persist to
+`~/.pi/agent/sessions/` so you can resume across server restarts.
 
-## Features
+## Tech
 
-- 💬 **Terminal-like Chat Interface** - Streaming responses with syntax highlighting
-- 🧠 **Pi SDK Integration** - Powered by the battle-tested Pi coding agent
-- 🎤 **Voice Input/Output** - TTS and STT services for hands-free interaction
-- 👁️ **Vision Services** - Face detection, object detection, and webcam integration
-- 🎭 **3D Avatar** - Interactive talking head with lipsync animation
-- 📊 **Service Dashboard** - Monitor and control all microservices
-- 🔄 **Self-Healing** - Automatic failure detection and recovery
-- 📈 **Self-Learning** - Continuous improvement through session analysis
-- 🔌 **IDE Extension** - VS Code integration for contextual assistance
-- 🌐 **REST API** - External integrations with authentication
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js 15 (App Router), React 19, Tailwind CSS |
+| Backend | Node.js 22+, Express, Socket.IO |
+| AI core | `@earendil-works/pi-coding-agent` (in-process SDK) |
+| State | Zustand |
+| Workspace | npm workspaces |
 
-## Architecture
-
-Built with a microservice architecture where each capability (TTS, STT, detection, etc.) runs as an independent process, managed by a central service orchestrator.
-
-- **Frontend**: Next.js 15 + React 19
-- **Backend**: Node.js 22+ with Express + Socket.io
-- **AI Core**: @earendil-works/pi-coding-agent SDK
-- **Database**: SQLite (local-first)
-
-## Quick Start
+## Run it
 
 ```bash
-# Install dependencies
 npm install
-
-# Start development servers
-npm run dev
+npm run dev          # starts server (:3001) and web (:3000)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open <http://localhost:3000/>. Make sure you have an API key configured
+either via `~/.pi/agent/auth.json` (run `pi /login`) or an env var like
+`ANTHROPIC_API_KEY`.
 
-## Development
+## Scripts
 
 ```bash
-# Run all services in dev mode
-npm run dev
-
-# Build for production
-npm run build
-
-# Run tests
-npm run test
-
-# Lint code
+npm run dev          # server + web in parallel
+npm run dev:server   # just the server
+npm run dev:web      # just the web
+npm run build        # build both
 npm run lint
-
-# Format code
-npm run format
+npm test
 ```
 
-## Project Structure
+## Layout
 
 ```
-MyCodingAssistant/
-├── apps/
-│   ├── web/          # Next.js frontend
-│   ├── server/       # Backend server
-│   └── extension/    # VS Code extension
-├── packages/
-│   ├── llm-service/           # Pi SDK wrapper
-│   ├── tts-service/           # Text-to-speech
-│   ├── stt-service/           # Speech-to-text
-│   ├── face-detection/        # Face detection
-│   ├── object-detection/      # Object detection
-│   ├── avatar-3d/             # 3D avatar rendering
-│   ├── learning-service/      # Learning & improvement
-│   ├── service-manager/       # Process management
-│   └── shared/                # Shared types & utilities
-└── docs/                      # Documentation
+apps/
+  server/                Express + Socket.IO + Pi SDK wrapper
+    src/services/pi-session.ts    AgentSession lifecycle
+    src/websocket/handlers.ts     chat:send/abort/new/resume/list/state
+    src/api/routes.ts             REST: models + sessions
+  web/                   Next.js frontend
+    src/app/             root layout + page (renders <AppShell/>)
+    src/components/
+      AppShell           sidebar + main view router
+      ChatScreen         streaming chat with text + thinking + tool blocks
+      SessionsView       persisted session list, click to resume
+      Settings           model picker, thinking level, theme toggle
+      Sidebar            three-item nav (chat / sessions / settings)
+    src/hooks/           useSpeechRecognition, useSpeechSynthesis
+    src/lib/             store (Zustand), socket, theme, utils
+packages/
+  shared/                shared TS types
 ```
 
-## Documentation
+## Theme
 
-- [Project Plan](PROJECT_PLAN.md) - Comprehensive roadmap and architecture
-- [API Documentation](docs/api.md) - REST API reference
-- [Service Guide](docs/services.md) - Microservice architecture guide
-- [User Guide](docs/user-guide.md) - End-user documentation
-
-## Roadmap
-
-See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full development roadmap:
-
-- **Phase 1-2**: Foundation & Service Architecture
-- **Phase 3-4**: TTS/STT & Vision Services
-- **Phase 5-6**: 3D Avatar & Learning Layer
-- **Phase 7-8**: Dashboard & IDE Extension
-- **Phase 9-10**: API Service & Self-Healing
-- **Phase 11-12**: Android App & Production
-
-## Contributing
-
-This is a personal project. Feel free to fork and customize for your own needs.
-
-## License
-
-MIT
+Light/dark, WCAG 2.2 AAA contrast. Defaults to OS preference, persists user
+override in `localStorage`. The theme class is set by an inline
+pre-hydration script in `layout.tsx` so there's no flash on first paint.

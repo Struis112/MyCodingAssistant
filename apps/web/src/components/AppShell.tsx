@@ -2,11 +2,7 @@
 
 import { useEffect } from 'react';
 import { ChatScreen } from '@/components/ChatScreen';
-import { Dashboard } from '@/components/Dashboard';
 import { Settings } from '@/components/Settings';
-import { AvatarView } from '@/components/AvatarView';
-import { CameraView } from '@/components/CameraView';
-import { LogsViewer } from '@/components/LogsViewer';
 import { SessionsView } from '@/components/SessionsView';
 import { Sidebar } from '@/components/Sidebar';
 import { useAppStore } from '@/lib/store';
@@ -16,7 +12,6 @@ export function AppShell() {
   const { activeView, sessionId, setCurrentModel } = useAppStore();
 
   // On first connect, ask the server to attach our session and report its state.
-  // This auto-resumes a persisted session if one already exists for our sessionId.
   useEffect(() => {
     const socket = getSocket();
 
@@ -31,9 +26,7 @@ export function AppShell() {
       };
     }) => {
       if (data.sessionId !== sessionId) return;
-      if (data.state?.model) {
-        setCurrentModel(data.state.model);
-      }
+      if (data.state?.model) setCurrentModel(data.state.model);
     };
 
     socket.on('connect', sendInit);
@@ -53,11 +46,7 @@ export function AppShell() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === 'chat' && <ChatScreen />}
         {activeView === 'sessions' && <SessionsView />}
-        {activeView === 'dashboard' && <Dashboard />}
         {activeView === 'settings' && <Settings />}
-        {activeView === 'avatar' && <AvatarView />}
-        {activeView === 'camera' && <CameraView />}
-        {activeView === 'logs' && <LogsViewer />}
       </main>
     </div>
   );
