@@ -4,6 +4,7 @@ import { ChatScreen } from '@/components/ChatScreen';
 import { Dashboard } from '@/components/Dashboard';
 import { Settings } from '@/components/Settings';
 import { AvatarView } from '@/components/AvatarView';
+import { CameraView } from '@/components/CameraView';
 import { Sidebar } from '@/components/Sidebar';
 import { useAppStore } from '@/lib/store';
 
@@ -21,6 +22,7 @@ export function AppShell() {
         {activeView === 'dashboard' && <Dashboard />}
         {activeView === 'settings' && <Settings />}
         {activeView === 'avatar' && <AvatarView />}
+        {activeView === 'camera' && <CameraView />}
       </main>
     </div>
   );
