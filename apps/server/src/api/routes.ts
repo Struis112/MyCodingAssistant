@@ -9,19 +9,29 @@ export function registerApiRoutes(
   piSessionManager: PiSessionManager,
   serviceManager: ServiceManager
 ): void {
-  // --- Sessions ---
-  app.get('/api/sessions', (_req, res) => {
-    res.json(piSessionManager.listSessions());
+  // ----- Sessions -----
+
+  app.get('/api/sessions/active', (_req, res) => {
+    res.json(piSessionManager.listActiveSessions());
+  });
+
+  app.get('/api/sessions', async (_req, res) => {
+    try {
+      const sessions = await piSessionManager.listPersistedSessions();
+      res.json(sessions);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   app.post('/api/sessions', async (req, res) => {
     try {
-      const { sessionId, cwd } = req.body;
+      const { sessionId } = req.body ?? {};
       const id = sessionId || crypto.randomUUID();
-      await piSessionManager.createSession(id, cwd);
+      await piSessionManager.newSession(id);
       res.json({ success: true, sessionId: id });
-    } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
     }
   });
 
@@ -30,17 +40,19 @@ export function registerApiRoutes(
     res.json({ success: true });
   });
 
-  // --- Models ---
+  // ----- Models -----
+
   app.get('/api/models', async (_req, res) => {
     try {
       const models = await piSessionManager.getAvailableModels();
       res.json(models);
-    } catch (error) {
-      res.status(500).json({ error: String(error) });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
     }
   });
 
-  // --- Services ---
+  // ----- Services -----
+
   app.get('/api/services', (_req, res) => {
     res.json(serviceManager.getStatus());
   });
@@ -49,8 +61,8 @@ export function registerApiRoutes(
     try {
       await serviceManager.startService(req.params.name);
       res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
     }
   });
 
@@ -58,8 +70,8 @@ export function registerApiRoutes(
     try {
       await serviceManager.stopService(req.params.name);
       res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
     }
   });
 
@@ -67,8 +79,8 @@ export function registerApiRoutes(
     try {
       await serviceManager.restartService(req.params.name);
       res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ success: false, error: String(error) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
     }
   });
 }

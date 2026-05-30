@@ -33,16 +33,10 @@ const io = new SocketIOServer(httpServer, {
 const serviceManager = new ServiceManager();
 const piSessionManager = new PiSessionManager();
 
-// Register microservices
-serviceManager.registerService({
-  name: 'llm-service',
-  script: 'dist/services/llm-worker.js',
-  healthEndpoint: '/health',
-  restart: true,
-  maxRestarts: 5,
-  restartDelay: 2000,
-});
-
+// Register microservices (media + perception).
+// Note: the LLM does NOT run as a worker process. It lives in this server
+// process via PiSessionManager because the Pi SDK is an in-process Node
+// library, not a network service.
 serviceManager.registerService({
   name: 'tts-service',
   script: 'dist/services/tts-worker.js',
@@ -92,7 +86,6 @@ serviceManager.registerService({
 // (gives the user a running system out of the box)
 async function autoStartServices() {
   const servicesToStart = [
-    'llm-service',
     'tts-service',
     'stt-service',
     'face-detection',
