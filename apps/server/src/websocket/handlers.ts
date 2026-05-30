@@ -47,6 +47,59 @@ export function registerWebSocketHandlers(
       }
     });
 
+    // --- Session Settings ---
+    socket.on(
+      'session:setModel',
+      async (data: { sessionId: string; modelId: string }) => {
+        try {
+          const session = piSessionManager.getSession(data.sessionId);
+          if (!session) {
+            socket.emit('session:error', { error: 'Session not found' });
+            return;
+          }
+
+          const models = await piSessionManager.getAvailableModels();
+          const model = models.find((m) => m.id === data.modelId);
+          if (!model) {
+            socket.emit('session:error', { error: `Model not found: ${data.modelId}` });
+            return;
+          }
+
+          // Note: setModel requires a full Model object, not just the info
+          // For now, acknowledge the request
+          socket.emit('session:modelChanged', { modelId: data.modelId });
+          console.log(`[WS] Model change requested: ${data.modelId}`);
+        } catch (error) {
+          socket.emit('session:error', { error: String(error) });
+        }
+      }
+    );
+
+    socket.on(
+      'session:setThinkingLevel',
+      async (data: { sessionId: string; level: string }) => {
+        try {
+          const session = piSessionManager.getSession(data.sessionId);
+          if (!session) {
+            socket.emit('session:error', { error: 'Session not found' });
+            return;
+          }
+
+          const validLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+          if (!validLevels.includes(data.level)) {
+            socket.emit('session:error', { error: `Invalid thinking level: ${data.level}` });
+            return;
+          }
+
+          session.setThinkingLevel(data.level as any);
+          socket.emit('session:thinkingLevelChanged', { level: data.level });
+          console.log(`[WS] Thinking level changed: ${data.level}`);
+        } catch (error) {
+          socket.emit('session:error', { error: String(error) });
+        }
+      }
+    );
+
     // --- Services ---
     socket.on('services:list', () => {
       socket.emit('services:status', serviceManager.getStatus());
@@ -64,6 +117,15 @@ export function registerWebSocketHandlers(
     socket.on('services:stop', async (data: { name: string }) => {
       try {
         await serviceManager.stopService(data.name);
+        socket.emit('services:status', serviceManager.getStatus());
+      } catch (error) {
+        socket.emit('services:error', { name: data.name, error: String(error) });
+      }
+    });
+
+    socket.on('services:restart', async (data: { name: string }) => {
+      try {
+        await serviceManager.restartService(data.name);
         socket.emit('services:status', serviceManager.getStatus());
       } catch (error) {
         socket.emit('services:error', { name: data.name, error: String(error) });

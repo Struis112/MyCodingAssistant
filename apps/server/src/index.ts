@@ -43,13 +43,70 @@ serviceManager.registerService({
   restartDelay: 2000,
 });
 
+serviceManager.registerService({
+  name: 'tts-service',
+  script: 'dist/services/tts-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 3,
+  restartDelay: 2000,
+});
+
+serviceManager.registerService({
+  name: 'stt-service',
+  script: 'dist/services/stt-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 3,
+  restartDelay: 2000,
+});
+
+serviceManager.registerService({
+  name: 'face-detection',
+  script: 'dist/services/face-detection-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 3,
+  restartDelay: 3000,
+});
+
+serviceManager.registerService({
+  name: 'object-detection',
+  script: 'dist/services/object-detection-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 3,
+  restartDelay: 3000,
+});
+
+serviceManager.registerService({
+  name: 'avatar-3d',
+  script: 'dist/services/avatar-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 3,
+  restartDelay: 2000,
+});
+
 // Auto-start services that are configured to restart
 // (gives the user a running system out of the box)
 async function autoStartServices() {
-  try {
-    await serviceManager.startService('llm-service');
-  } catch (err: any) {
-    console.warn(`[MCA Server] Could not auto-start llm-service: ${err.message}`);
+  const servicesToStart = [
+    'llm-service',
+    'tts-service',
+    'stt-service',
+    'face-detection',
+    'object-detection',
+    'avatar-3d',
+  ];
+
+  for (const name of servicesToStart) {
+    try {
+      await serviceManager.startService(name);
+      console.log(`[MCA Server] Started ${name}`);
+    } catch (err: any) {
+      console.warn(`[MCA Server] Could not auto-start ${name}: ${err.message}`);
+    }
   }
 }
 

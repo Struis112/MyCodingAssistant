@@ -92,12 +92,20 @@ export default function HomePage() {
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
-                href="#getting-started"
+                href="/app"
                 className="flex items-center gap-2 px-8 py-4 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition-colors"
               >
-                Get Started
+                Launch App
                 <ArrowRight className="w-5 h-5" />
               </Link>
+              <Link
+                href="#getting-started"
+                className="flex items-center gap-2 px-8 py-4 border border-border text-foreground rounded-lg font-semibold hover:bg-muted transition-colors"
+              >
+                Get Started
+                <ChevronRight className="w-5 h-5" />
+              </Link>
+            </div>
               <Link
                 href="https://github.com/Struis112/MyCodingAssistant"
                 target="_blank"
