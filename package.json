@@ -1,0 +1,36 @@
+{
+  "name": "my-coding-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-learning AI coding assistant with microservice architecture",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:server & npm run dev:web",
+    "dev:web": "npm run dev --workspace=@mca/web",
+    "dev:server": "npm run dev --workspace=@mca/server",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "clean": "npm run clean --workspaces && rm -rf node_modules"
+  },
+  "keywords": [
+    "ai",
+    "coding-assistant",
+    "pi-sdk",
+    "microservices"
+  ],
+  "author": "Struis112",
+  "license": "MIT",
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}
