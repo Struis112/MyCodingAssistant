@@ -14,10 +14,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar */}
       <Sidebar />
-
-      {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === 'chat' && <ChatScreen />}
         {activeView === 'dashboard' && <Dashboard />}

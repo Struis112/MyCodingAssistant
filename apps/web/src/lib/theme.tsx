@@ -12,61 +12,51 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+// Read the theme that the pre-hydration inline script (in layout.tsx) wrote
+// onto <html>. Falling back to 'dark' if anything is off.
+function getInitialTheme(): Theme {
+  if (typeof document === 'undefined') return 'dark';
+  return document.documentElement.classList.contains('light') ? 'light' : 'dark';
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('dark');
-  const [mounted, setMounted] = useState(false);
+  // Initialize from the class the pre-hydration script set. This matches
+  // what React rendered on the server (which has no class), but since we
+  // use suppressHydrationWarning on <html> the mismatch is safe.
+  const [theme, setThemeState] = useState<Theme>(getInitialTheme);
 
-  // Initialize theme from localStorage or OS preference
-  useEffect(() => {
-    setMounted(true);
-    
-    const stored = localStorage.getItem('mca-theme') as Theme | null;
-    if (stored) {
-      setThemeState(stored);
-      return;
-    }
-
-    // Detect OS preference
-    const osTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    setThemeState(osTheme);
-  }, []);
-
-  // Listen for OS theme changes
+  // Keep theme in sync with OS preference when the user hasn't explicitly chosen.
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    
     const handleChange = (e: MediaQueryListEvent) => {
-      // Only update if user hasn't manually set a preference
       const stored = localStorage.getItem('mca-theme');
       if (!stored) {
         setThemeState(e.matches ? 'dark' : 'light');
       }
     };
-
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, []);
 
-  // Apply theme to document
+  // Apply theme to <html> when it changes.
   useEffect(() => {
-    if (!mounted) return;
-    
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
-  }, [theme, mounted]);
+  }, [theme]);
 
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme);
-    localStorage.setItem('mca-theme', newTheme);
+    try {
+      localStorage.setItem('mca-theme', newTheme);
+    } catch {
+      /* private mode / quota — ignore */
+    }
   };
 
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
-  // Always provide the context so useTheme() works during SSR and before
-  // mount. The default 'dark' state matches the CSS default, preventing a
-  // flash of the wrong theme.
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
       {children}
