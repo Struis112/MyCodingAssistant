@@ -50,7 +50,7 @@ in an emergency: `git commit --no-verify`.
 Before opening a PR, please make sure:
 
 - [ ] `npm run lint` is clean
-- [ ] `npm run format:check` is clean
+- [ ] `npm run format:check` is clean (the pre-commit hook handles this for you)
 - [ ] `npm run typecheck` is clean
 - [ ] `npm test` passes
 - [ ] `npm run test:e2e` passes (one-time: `npx playwright install chromium`)
@@ -58,8 +58,15 @@ Before opening a PR, please make sure:
 - [ ] If you touched the Pi SDK integration, you re-read the
       ["Pi SDK footguns" section in AGENTS.md](./AGENTS.md)
 
-CI will run the same checks plus coverage and Docker image build. PRs that
-turn CI red won't be reviewed until they're green.
+CI will run lint, typecheck, tests with coverage, build, Playwright e2e,
+and a Docker image build. PRs that turn CI red won't be reviewed until
+they're green.
+
+> **Format-check is not in CI yet.** oxfmt 0.52 produces slightly different
+> output on Linux vs Windows for the same input (line-wrap thresholds in JSX
+> text, indentation inside nested try/catch). Until that settles, the
+> pre-commit hook is the source of truth for formatting. Run
+> `npm run format` before committing if you've been bypassing the hook.
 
 ## Architecture quick tour
 
