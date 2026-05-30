@@ -2,6 +2,16 @@
 // Bridges the Pi SDK agent session to the browser via socket.io.
 // Every AgentSessionEvent that the SDK emits is forwarded as `chat:event`
 // so the frontend can render text deltas, thinking blocks, tool calls, etc.
+//
+// Per-session room semantics
+// --------------------------
+// Every session-scoped event (chat:event, chat:done, chat:error, chat:queued,
+// chat:aborted, chat:new, chat:resumed, session:modelChanged,
+// session:thinkingLevelChanged) is delivered to the socket.io room
+// `session:<sessionId>` instead of broadcast to every connected client.
+// Sockets join their session room lazily on the first event they send for
+// that session id. This keeps separate browser tabs / clients with different
+// sessions cleanly isolated from each other.
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { PiSessionManager } from "../services/pi-session.js";
@@ -12,6 +22,20 @@ type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 // multiple prompts.
 const eventSubscribers = new Map<string, () => void>();
 
+/** The socket.io room name a session lives in. */
+function roomFor(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+/** Subscribe a socket to a session's room (idempotent in socket.io). */
+function joinSession(socket: Socket, sessionId: string): void {
+  try {
+    socket.join(roomFor(sessionId));
+  } catch {
+    /* tests may not implement join; ignore */
+  }
+}
+
 function attachEventForwarder(
   io: SocketIOServer,
   piSessionManager: PiSessionManager,
@@ -21,10 +45,12 @@ function attachEventForwarder(
   const session = piSessionManager.getSession(sessionId);
   if (!session) return;
 
+  const room = roomFor(sessionId);
   const unsubscribe = session.subscribe((event) => {
-    // Broadcast to all sockets so a reloaded tab still receives events for
-    // its session. In practice we expect one tab, but this is the right default.
-    io.emit("chat:event", { sessionId, event });
+    // Only sockets that have joined this session's room receive its events.
+    // A reloaded tab will re-join on its next chat:state, so it picks up
+    // future events seamlessly.
+    io.to(room).emit("chat:event", { sessionId, event });
   });
 
   eventSubscribers.set(sessionId, unsubscribe);
@@ -72,6 +98,8 @@ export function registerWebSocketHandlers(
         console.log(
           `[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} imgs=${imgCount} from=${socket.id}`,
         );
+        joinSession(socket, sessionId);
+        const room = roomFor(sessionId);
         try {
           await piSessionManager.getOrCreateSession(sessionId);
           attachEventForwarder(io, piSessionManager, sessionId);
@@ -92,7 +120,7 @@ export function registerWebSocketHandlers(
             // While streaming, images can't be attached to a queued message;
             // tell the user if they tried and fall through to text-only steer.
             if (sdkImages.length > 0) {
-              io.emit("chat:error", {
+              io.to(room).emit("chat:error", {
                 sessionId,
                 error: "Image attachments are ignored when the agent is already streaming.",
               });
@@ -100,7 +128,7 @@ export function registerWebSocketHandlers(
             const mode: "steer" | "followUp" = behavior === "followUp" ? "followUp" : "steer";
             if (mode === "followUp") await session.followUp(message);
             else await session.steer(message);
-            io.emit("chat:queued", { sessionId, behavior: mode });
+            io.to(room).emit("chat:queued", { sessionId, behavior: mode });
             return;
           }
 
@@ -109,64 +137,70 @@ export function registerWebSocketHandlers(
             message,
             (sdkImages.length > 0 ? { images: sdkImages } : undefined) as any,
           );
-          io.emit("chat:done", { sessionId });
+          io.to(room).emit("chat:done", { sessionId });
           console.log(`[WS] chat:done sid=${sessionId}`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[WS] chat:send FAILED sid=${sessionId}:`, msg);
-          io.emit("chat:error", { sessionId, error: msg });
-          io.emit("chat:done", { sessionId });
+          io.to(room).emit("chat:error", { sessionId, error: msg });
+          io.to(room).emit("chat:done", { sessionId });
         }
       },
     );
 
     socket.on("chat:abort", async (data: { sessionId: string }) => {
       console.log(`[WS] chat:abort sid=${data.sessionId} from=${socket.id}`);
+      joinSession(socket, data.sessionId);
+      const room = roomFor(data.sessionId);
       const session = piSessionManager.getSession(data.sessionId);
       if (session) {
         try {
           await session.abort();
-          io.emit("chat:aborted", { sessionId: data.sessionId });
-          io.emit("chat:done", { sessionId: data.sessionId });
+          io.to(room).emit("chat:aborted", { sessionId: data.sessionId });
+          io.to(room).emit("chat:done", { sessionId: data.sessionId });
         } catch (err) {
-          io.emit("chat:error", { sessionId: data.sessionId, error: String(err) });
-          io.emit("chat:done", { sessionId: data.sessionId });
+          io.to(room).emit("chat:error", { sessionId: data.sessionId, error: String(err) });
+          io.to(room).emit("chat:done", { sessionId: data.sessionId });
         }
       } else {
-        io.emit("chat:done", { sessionId: data.sessionId });
+        io.to(room).emit("chat:done", { sessionId: data.sessionId });
       }
     });
 
     socket.on("chat:new", async (data: { sessionId: string }) => {
+      joinSession(socket, data.sessionId);
+      const room = roomFor(data.sessionId);
       try {
         detachEventForwarder(data.sessionId);
         await piSessionManager.newSession(data.sessionId);
         attachEventForwarder(io, piSessionManager, data.sessionId);
         const session = piSessionManager.getSession(data.sessionId)!;
-        io.emit("chat:new", {
+        io.to(room).emit("chat:new", {
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
         });
       } catch (err) {
-        io.emit("chat:error", { sessionId: data.sessionId, error: String(err) });
+        io.to(room).emit("chat:error", { sessionId: data.sessionId, error: String(err) });
       }
     });
 
     socket.on("chat:resume", async (data: { sessionId: string; sessionFile: string }) => {
+      joinSession(socket, data.sessionId);
+      const room = roomFor(data.sessionId);
       try {
         detachEventForwarder(data.sessionId);
         await piSessionManager.resumeSession(data.sessionId, data.sessionFile);
         attachEventForwarder(io, piSessionManager, data.sessionId);
         const session = piSessionManager.getSession(data.sessionId)!;
-        io.emit("chat:resumed", {
+        io.to(room).emit("chat:resumed", {
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
           messages: session.messages,
         });
       } catch (err) {
-        io.emit("chat:error", { sessionId: data.sessionId, error: String(err) });
+        io.to(room).emit("chat:error", { sessionId: data.sessionId, error: String(err) });
       }
     });
 
@@ -180,6 +214,10 @@ export function registerWebSocketHandlers(
     });
 
     socket.on("chat:state", (data: { sessionId: string }) => {
+      // Joining on chat:state covers the reload case: the browser asks for
+      // current state on every (re)connect, which is also the right moment
+      // to (re)subscribe to its session's events.
+      joinSession(socket, data.sessionId);
       const session = piSessionManager.getSession(data.sessionId);
       if (!session) {
         socket.emit("chat:state:result", { sessionId: data.sessionId, state: null });
@@ -209,6 +247,8 @@ export function registerWebSocketHandlers(
     socket.on(
       "session:setModel",
       async (data: { sessionId: string; provider: string; modelId: string }) => {
+        joinSession(socket, data.sessionId);
+        const room = roomFor(data.sessionId);
         try {
           await piSessionManager.getOrCreateSession(data.sessionId);
           const model = await piSessionManager.setSessionModel(
@@ -216,7 +256,7 @@ export function registerWebSocketHandlers(
             data.provider,
             data.modelId,
           );
-          io.emit("session:modelChanged", { sessionId: data.sessionId, model });
+          io.to(room).emit("session:modelChanged", { sessionId: data.sessionId, model });
           console.log(`[WS] Model set: ${data.provider}/${data.modelId}`);
         } catch (err) {
           socket.emit("session:error", { error: String(err) });
@@ -227,10 +267,12 @@ export function registerWebSocketHandlers(
     socket.on(
       "session:setThinkingLevel",
       async (data: { sessionId: string; level: ThinkingLevel }) => {
+        joinSession(socket, data.sessionId);
+        const room = roomFor(data.sessionId);
         try {
           await piSessionManager.getOrCreateSession(data.sessionId);
           piSessionManager.setSessionThinkingLevel(data.sessionId, data.level);
-          io.emit("session:thinkingLevelChanged", {
+          io.to(room).emit("session:thinkingLevelChanged", {
             sessionId: data.sessionId,
             level: data.level,
           });

@@ -25,6 +25,45 @@ function makeEE(id?: string): EmitSpyEE & { id?: string } {
   return ee;
 }
 
+// io.to(room).emit(...) needs a tiny stand-in that funnels events back
+// through the same `io.emitSpy` so existing assertions over event names
+// keep working. We also track every (room, event) pair so room-routing
+// itself can be asserted.
+interface IoStub extends EmitSpyEE {
+  toCalls: Array<{ room: string; event: string; payload: unknown }>;
+  to: (room: string) => { emit: (event: string, payload?: unknown) => void };
+}
+
+function makeIo(): IoStub {
+  const io = makeEE() as IoStub;
+  io.toCalls = [];
+  io.to = (room: string) => ({
+    emit: (event: string, payload?: unknown) => {
+      io.toCalls.push({ room, event, payload });
+      // Also fire on the io spy so tests that only care about event names
+      // (and not the room) keep passing.
+      io.emit(event, payload);
+    },
+  });
+  return io;
+}
+
+// socket.join(room) — track every room a socket is asked to subscribe to.
+interface SocketStub extends EmitSpyEE {
+  id?: string;
+  joinedRooms: string[];
+  join: (room: string) => void;
+}
+
+function makeSocket(id: string): SocketStub {
+  const socket = makeEE(id) as SocketStub;
+  socket.joinedRooms = [];
+  socket.join = (room: string) => {
+    socket.joinedRooms.push(room);
+  };
+  return socket;
+}
+
 function makeSessionStub(overrides: Partial<Record<string, unknown>> = {}) {
   let isStreaming = false;
   return {
@@ -70,8 +109,8 @@ function makePiStub(session = makeSessionStub()) {
 }
 
 function setup(piOverride?: ReturnType<typeof makePiStub>) {
-  const io = makeEE();
-  const socket = makeEE("sock-1");
+  const io = makeIo();
+  const socket = makeSocket("sock-1");
   const pi = piOverride ?? makePiStub();
 
   registerWebSocketHandlers(
@@ -274,5 +313,60 @@ describe("chat:resume", () => {
     expect(pi.resumeSession).toHaveBeenCalledWith("default", "/tmp/x.jsonl");
     const events = io.emitSpy.mock.calls.map((c) => c[0]);
     expect(events).toContain("chat:resumed");
+  });
+});
+
+describe("per-session rooms", () => {
+  it("joins the session room on chat:send and routes chat:done there", async () => {
+    const { io, socket } = setup();
+    socket.emit("chat:send", { sessionId: "sess-abc", message: "hi" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(socket.joinedRooms).toContain("session:sess-abc");
+    const done = io.toCalls.find((c) => c.event === "chat:done");
+    expect(done?.room).toBe("session:sess-abc");
+  });
+
+  it("routes chat:aborted + chat:done to the session room on chat:abort", async () => {
+    const { io, socket } = setup();
+    socket.emit("chat:abort", { sessionId: "sess-xyz" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(socket.joinedRooms).toContain("session:sess-xyz");
+    const rooms = io.toCalls
+      .filter((c) => c.event === "chat:aborted" || c.event === "chat:done")
+      .map((c) => c.room);
+    expect(rooms.every((r) => r === "session:sess-xyz")).toBe(true);
+    expect(rooms.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("joins on chat:state so a reloaded tab re-subscribes to its session", async () => {
+    const { socket } = setup();
+    socket.emit("chat:state", { sessionId: "sess-state" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(socket.joinedRooms).toContain("session:sess-state");
+  });
+
+  it("routes session:modelChanged to the session room", async () => {
+    const { io, socket } = setup();
+    socket.emit("session:setModel", {
+      sessionId: "sess-model",
+      provider: "anthropic",
+      modelId: "m1",
+    });
+    await new Promise((r) => setImmediate(r));
+
+    const changed = io.toCalls.find((c) => c.event === "session:modelChanged");
+    expect(changed?.room).toBe("session:sess-model");
+  });
+
+  it("routes session:thinkingLevelChanged to the session room", async () => {
+    const { io, socket } = setup();
+    socket.emit("session:setThinkingLevel", { sessionId: "sess-tl", level: "high" });
+    await new Promise((r) => setImmediate(r));
+
+    const changed = io.toCalls.find((c) => c.event === "session:thinkingLevelChanged");
+    expect(changed?.room).toBe("session:sess-tl");
   });
 });
