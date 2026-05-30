@@ -14,9 +14,7 @@
 // sessions cleanly isolated from each other.
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
-import type { PiSessionManager } from "../services/pi-session.js";
-
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+import type { ConnectorManager, ThinkingLevel } from "../connectors/types.js";
 
 // Per-session unsubscribers so we can clean up when the same session is sent
 // multiple prompts.
@@ -38,7 +36,7 @@ function joinSession(socket: Socket, sessionId: string): void {
 
 function attachEventForwarder(
   io: SocketIOServer,
-  piSessionManager: PiSessionManager,
+  piSessionManager: ConnectorManager,
   sessionId: string,
 ): void {
   if (eventSubscribers.has(sessionId)) return;
@@ -109,7 +107,7 @@ function detachEventForwarder(sessionId: string): void {
 
 export function registerWebSocketHandlers(
   io: SocketIOServer,
-  piSessionManager: PiSessionManager,
+  piSessionManager: ConnectorManager,
 ): void {
   io.on("connection", (socket: Socket) => {
     console.log(`[WS] Client connected: ${socket.id}`);

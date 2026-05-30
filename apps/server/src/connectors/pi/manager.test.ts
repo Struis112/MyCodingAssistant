@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PiSessionManager } from "./pi-session.js";
+import { PiSessionManager } from "./manager.js";
 
 // These tests intentionally avoid network or LLM activity. They only exercise
 // the bookkeeping surface of PiSessionManager so CI is fast and offline-safe.

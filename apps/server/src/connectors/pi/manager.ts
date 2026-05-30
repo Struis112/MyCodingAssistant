@@ -1,7 +1,10 @@
-// Pi SDK Session Manager
+// Pi SDK connector — session manager.
 // Wraps @earendil-works/pi-coding-agent for persistent, multi-session use.
 // Sessions live on disk in ~/.pi/agent/sessions/ so the assistant resumes
 // across server restarts.
+//
+// This file moved from `apps/server/src/services/pi-session.ts` as part of
+// the multi-connector refactor (Phase A). Behaviour is unchanged.
 
 import {
   AuthStorage,
@@ -10,26 +13,17 @@ import {
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import type {
+  ActiveSessionInfo,
+  AgentLike,
+  AgentModel,
+  AvailableModel,
+  ConnectorManager,
+  PersistedSessionDescriptor,
+  ThinkingLevel,
+} from "../types.js";
 
-export interface SessionInfo {
-  id: string;
-  sessionFile: string | undefined;
-  sessionId: string;
-  model: string | undefined;
-  thinkingLevel: string;
-  isStreaming: boolean;
-  messageCount: number;
-}
-
-export interface SessionFile {
-  id: string;
-  path: string;
-  name: string;
-  modifiedAt: number;
-  messageCount?: number;
-}
-
-export class PiSessionManager {
+export class PiSessionManager implements ConnectorManager {
   private sessions = new Map<string, AgentSession>();
   private cwd: string;
   public readonly authStorage: AuthStorage;
@@ -50,9 +44,9 @@ export class PiSessionManager {
   async getOrCreateSession(
     sessionId: string,
     options: { sessionFile?: string; continueRecent?: boolean } = {},
-  ): Promise<AgentSession> {
+  ): Promise<AgentLike> {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) return existing as unknown as AgentLike;
 
     let sessionManager;
     if (options.sessionFile) {
@@ -76,19 +70,15 @@ export class PiSessionManager {
     });
 
     this.sessions.set(sessionId, session);
-    return session;
+    return session as unknown as AgentLike;
   }
 
-  getSession(sessionId: string): AgentSession | undefined {
-    return this.sessions.get(sessionId);
+  getSession(sessionId: string): AgentLike | undefined {
+    return this.sessions.get(sessionId) as unknown as AgentLike | undefined;
   }
 
   /** Change the active model on an existing session. */
-  async setSessionModel(
-    sessionId: string,
-    provider: string,
-    modelId: string,
-  ): Promise<{ id: string; name: string; provider: string }> {
+  async setSessionModel(sessionId: string, provider: string, modelId: string): Promise<AgentModel> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
 
@@ -100,16 +90,13 @@ export class PiSessionManager {
   }
 
   /** Change the thinking level on an existing session. */
-  setSessionThinkingLevel(
-    sessionId: string,
-    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
-  ): void {
+  setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     session.setThinkingLevel(level);
   }
 
-  listActiveSessions(): SessionInfo[] {
+  listActiveSessions(): ActiveSessionInfo[] {
     return Array.from(this.sessions.entries()).map(([id, session]) => ({
       id,
       sessionFile: session.sessionFile,
@@ -122,9 +109,11 @@ export class PiSessionManager {
   }
 
   /** List persisted session files for the current cwd. */
-  async listPersistedSessions(): Promise<SessionFile[]> {
+  async listPersistedSessions(): Promise<PersistedSessionDescriptor[]> {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const raw: any[] = await (SessionManager as any).list(this.cwd);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (raw || []).map((entry: any) => ({
         id: entry.id || entry.sessionId || entry.path || String(entry),
         path: entry.path || entry.filePath || entry.file || "",
@@ -138,18 +127,18 @@ export class PiSessionManager {
   }
 
   /** Replace the session on a given id with one opened from a file. */
-  async resumeSession(sessionId: string, sessionFile: string): Promise<AgentSession> {
+  async resumeSession(sessionId: string, sessionFile: string): Promise<AgentLike> {
     this.disposeSession(sessionId);
     return this.getOrCreateSession(sessionId, { sessionFile });
   }
 
   /** Replace the session on a given id with a fresh new one. */
-  async newSession(sessionId: string): Promise<AgentSession> {
+  async newSession(sessionId: string): Promise<AgentLike> {
     this.disposeSession(sessionId);
     return this.getOrCreateSession(sessionId);
   }
 
-  async getAvailableModels() {
+  async getAvailableModels(): Promise<AvailableModel[]> {
     const models = await this.modelRegistry.getAvailable();
     return models.map((m) => ({
       id: m.id,

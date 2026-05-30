@@ -1,9 +1,9 @@
 // REST API Routes — chat sessions and model list only.
 
 import type { Express } from "express";
-import type { PiSessionManager } from "../services/pi-session.js";
+import type { ConnectorManager } from "../connectors/types.js";
 
-export function registerApiRoutes(app: Express, piSessionManager: PiSessionManager): void {
+export function registerApiRoutes(app: Express, piSessionManager: ConnectorManager): void {
   // ----- Sessions -----
 
   app.get("/api/sessions/active", (_req, res) => {

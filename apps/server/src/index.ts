@@ -1,12 +1,15 @@
 // MyCodingAssistant Server - Entry point
-// Integrates Pi SDK via WebSocket + REST API.
+// Integrates one or more coding-agent harnesses via WebSocket + REST API.
+// Today there's a single connector (Pi SDK); future harnesses (Claude Code,
+// Opencode Go) register themselves the same way.
 
 import express from "express";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import path from "node:path";
-import { PiSessionManager } from "./services/pi-session.js";
+import { ConnectorRegistry } from "./connectors/registry.js";
+import { createPiConnector } from "./connectors/pi/index.js";
 import { WebSupervisor, type WebStatus } from "./services/web-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
@@ -34,8 +37,12 @@ const io = new SocketIOServer(httpServer, {
   },
 });
 
-// Core service — the Pi SDK lives in-process here.
-const piSessionManager = new PiSessionManager();
+// Connector registry. The first connector registered becomes the default,
+// so today every chat:* event still resolves to the Pi SDK manager exactly
+// as before.
+const connectors = new ConnectorRegistry();
+connectors.register(createPiConnector());
+const piSessionManager = connectors.getDefaultManager();
 
 // Optional: keep the Next.js web server alive across crashes / updates.
 // Off by default so `npm run dev:server` doesn't fight `npm run dev:web`.
@@ -104,7 +111,7 @@ async function shutdown() {
   if (webSupervisor) {
     await webSupervisor.stop().catch(() => {});
   }
-  piSessionManager.disposeAll();
+  connectors.disposeAll();
   httpServer.close(() => {
     console.log("[MCA Server] Stopped");
     process.exit(0);
