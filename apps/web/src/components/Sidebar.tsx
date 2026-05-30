@@ -4,14 +4,14 @@ import { useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { connectSocket, getSocket } from '@/lib/socket';
 import { cn } from '@/lib/utils';
-import { MessageSquare, LayoutDashboard, Settings, Bot, Wifi, WifiOff } from 'lucide-react';
+import { MessageSquare, LayoutDashboard, Settings as SettingsIcon, Bot, Wifi, WifiOff } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 const navItems = [
   { id: 'chat', icon: MessageSquare, label: 'Chat' },
   { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { id: 'avatar', icon: Bot, label: 'Avatar' },
-  { id: 'settings', icon: Settings, label: 'Settings' },
+  { id: 'settings', icon: SettingsIcon, label: 'Settings' },
 ] as const;
 
 export function Sidebar() {

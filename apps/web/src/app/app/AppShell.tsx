@@ -2,6 +2,7 @@
 
 import { ChatScreen } from '@/components/ChatScreen';
 import { Dashboard } from '@/components/Dashboard';
+import { Settings } from '@/components/Settings';
 import { Sidebar } from '@/components/Sidebar';
 import { useAppStore } from '@/lib/store';
 
@@ -17,6 +18,7 @@ export function AppShell() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === 'chat' && <ChatScreen />}
         {activeView === 'dashboard' && <Dashboard />}
+        {activeView === 'settings' && <Settings />}
       </main>
     </div>
   );

@@ -33,6 +33,31 @@ const io = new SocketIOServer(httpServer, {
 const serviceManager = new ServiceManager();
 const piSessionManager = new PiSessionManager();
 
+// Register microservices
+serviceManager.registerService({
+  name: 'llm-service',
+  script: 'dist/services/llm-worker.js',
+  healthEndpoint: '/health',
+  restart: true,
+  maxRestarts: 5,
+  restartDelay: 2000,
+});
+
+// Auto-start services that are configured to restart
+// (gives the user a running system out of the box)
+async function autoStartServices() {
+  try {
+    await serviceManager.startService('llm-service');
+  } catch (err: any) {
+    console.warn(`[MCA Server] Could not auto-start llm-service: ${err.message}`);
+  }
+}
+
+// Forward service logs to connected WebSocket clients
+serviceManager.on('service:log', (log: { name: string; level: string; message: string }) => {
+  io.emit('service:log', log);
+});
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({
@@ -51,6 +76,7 @@ registerWebSocketHandlers(io, piSessionManager, serviceManager);
 httpServer.listen(PORT, HOST, () => {
   console.log(`[MCA Server] Running on http://${HOST}:${PORT}`);
   console.log('[MCA Server] WebSocket ready for frontend connections');
+  autoStartServices();
 });
 
 // Graceful shutdown
