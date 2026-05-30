@@ -45,12 +45,51 @@ function attachEventForwarder(
   const session = piSessionManager.getSession(sessionId);
   if (!session) return;
 
+  // Per-turn diagnostic counters. Reset at every message_start so a quiet
+  // turn (model returned 0 text/thinking content) is visible from the server
+  // log alone — helpful when the UI shows an empty assistant bubble.
+  let counts = { text: 0, thinking: 0, toolStart: 0, toolEnd: 0 };
+  let inTurn = false;
+  const debug = process.env.MCA_DEBUG_EVENTS === "1";
+
   const room = roomFor(sessionId);
   const unsubscribe = session.subscribe((event) => {
     // Only sockets that have joined this session's room receive its events.
     // A reloaded tab will re-join on its next chat:state, so it picks up
     // future events seamlessly.
     io.to(room).emit("chat:event", { sessionId, event });
+
+    // ---- Diagnostics ----
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ev = event as any;
+    if (debug) console.log(`[WS] event sid=${sessionId} type=${ev?.type}`);
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "message_start" && ev.message?.role === "assistant") {
+      counts = { text: 0, thinking: 0, toolStart: 0, toolEnd: 0 };
+      inTurn = true;
+      return;
+    }
+    if (ev.type === "message_update") {
+      const sub = ev.assistantMessageEvent?.type;
+      if (sub === "text_delta") counts.text += 1;
+      else if (sub === "thinking_delta") counts.thinking += 1;
+      return;
+    }
+    if (ev.type === "tool_execution_start") counts.toolStart += 1;
+    else if (ev.type === "tool_execution_end") counts.toolEnd += 1;
+    else if (ev.type === "message_end" && inTurn) {
+      inTurn = false;
+      const empty = counts.text === 0 && counts.thinking === 0 && counts.toolStart === 0;
+      if (empty) {
+        console.warn(
+          `[WS] WARN sid=${sessionId} assistant message ended with 0 text / 0 thinking / 0 tool events — likely an invalid model or empty model response`,
+        );
+      } else if (debug) {
+        console.log(
+          `[WS] turn done sid=${sessionId} text=${counts.text} thinking=${counts.thinking} tools=${counts.toolStart}/${counts.toolEnd}`,
+        );
+      }
+    }
   });
 
   eventSubscribers.set(sessionId, unsubscribe);
