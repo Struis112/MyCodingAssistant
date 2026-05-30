@@ -33,6 +33,7 @@
     --warning: 210 153 34; /* #d29922 */
     --error: 248 81 73; /* #f85149 */
     --info: 88 166 255;
+    --arg: 255 166 87; /* #ffa657 — tool argument highlight (AAA on card) */
   }
 
   /* Light theme */
@@ -53,6 +54,7 @@
     --warning: 154 103 0; /* #9a6700 */
     --error: 207 34 46; /* #cf222e */
     --info: 9 105 218;
+    --arg: 128 56 0; /* #803800 — tool argument highlight (AAA on card) */
   }
 }
 

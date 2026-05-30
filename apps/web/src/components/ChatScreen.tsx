@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useAppStore, type ChatItem, type ContentBlock } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { generateId, formatTimestamp, cn } from "@/lib/utils";
+import { Markdown } from "@/components/Markdown";
 import {
   Send,
   Square,
@@ -71,7 +72,8 @@ function agentMessagesToChatItems(messages: RawMessage[]): ChatItem[] {
       const content = Array.isArray(msg.content) ? (msg.content as RawContentBlock[]) : [];
       for (const c of content) {
         if (c.type === "text" && c.text) blocks.push({ type: "text", text: c.text });
-        else if (c.type === "thinking" && c.thinking) blocks.push({ type: "thinking", text: c.thinking });
+        else if (c.type === "thinking" && c.thinking)
+          blocks.push({ type: "thinking", text: c.thinking });
         else if (c.type === "toolCall" && c.id && c.name) {
           items.push({
             kind: "tool",
@@ -187,7 +189,11 @@ export function ChatScreen() {
             if (idx === -1) {
               blocks.push({ type: blockType, text: delta, isStreaming: true });
             } else {
-              const b = blocks[idx] as { type: typeof blockType; text: string; isStreaming?: boolean };
+              const b = blocks[idx] as {
+                type: typeof blockType;
+                text: string;
+                isStreaming?: boolean;
+              };
               blocks[idx] = { type: blockType, text: b.text + delta, isStreaming: true };
             }
             return { ...it, blocks };
@@ -221,7 +227,10 @@ export function ChatScreen() {
           case "thinking_start":
             updateItem(currentId, (it) =>
               it.kind === "assistant"
-                ? { ...it, blocks: [...it.blocks, { type: "thinking", text: "", isStreaming: true }] }
+                ? {
+                    ...it,
+                    blocks: [...it.blocks, { type: "thinking", text: "", isStreaming: true }],
+                  }
                 : it,
             );
             return;
@@ -238,7 +247,9 @@ export function ChatScreen() {
       if (ev.type === "message_end") {
         const currentId = currentAssistantIdRef.current;
         if (currentId) {
-          updateItem(currentId, (it) => (it.kind === "assistant" ? { ...it, isStreaming: false } : it));
+          updateItem(currentId, (it) =>
+            it.kind === "assistant" ? { ...it, isStreaming: false } : it,
+          );
         }
         currentAssistantIdRef.current = null;
         return;
@@ -262,7 +273,9 @@ export function ChatScreen() {
       if (ev.type === "tool_execution_update") {
         const existing = findToolItemByCallId(ev.toolCallId);
         if (!existing || existing.kind !== "tool") return;
-        updateItem(existing.id, (it) => (it.kind === "tool" ? { ...it, result: ev.partialResult } : it));
+        updateItem(existing.id, (it) =>
+          it.kind === "tool" ? { ...it, result: ev.partialResult } : it,
+        );
         return;
       }
 
@@ -305,7 +318,11 @@ export function ChatScreen() {
       setIsStreaming(false);
     };
 
-    const onResumed = (data: { sessionId: string; sessionFile?: string; messages?: RawMessage[] }) => {
+    const onResumed = (data: {
+      sessionId: string;
+      sessionFile?: string;
+      messages?: RawMessage[];
+    }) => {
       if (data.sessionId !== sessionId) return;
       setSessionFile(data.sessionFile);
       const restored = agentMessagesToChatItems(data.messages || []);
@@ -331,7 +348,16 @@ export function ChatScreen() {
       socket.off("chat:resumed", onResumed);
       socket.off("chat:new", onNew);
     };
-  }, [sessionId, addItem, updateItem, findToolItemByCallId, setIsStreaming, setItems, clearItems, setSessionFile]);
+  }, [
+    sessionId,
+    addItem,
+    updateItem,
+    findToolItemByCallId,
+    setIsStreaming,
+    setItems,
+    clearItems,
+    setSessionFile,
+  ]);
 
   // ----- actions -----
 
@@ -453,7 +479,12 @@ export function ChatScreen() {
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <header className="h-12 border-b border-border flex items-center px-4 gap-3 shrink-0">
-        <h1 className="text-sm font-semibold text-foreground">Placeholder</h1>
+        <h1
+          className="text-sm font-semibold text-foreground truncate max-w-[280px]"
+          title={sessionFile ?? "New chat"}
+        >
+          {sessionTitle(sessionFile)}
+        </h1>
 
         {/* Harness: pi.dev logo.
             Locked to the pi.dev branding color (black) inside a white circle
@@ -469,7 +500,10 @@ export function ChatScreen() {
 
         {/* Active model — between harness icon and thinking level */}
         {currentModel ? (
-          <span className="text-xs text-muted-foreground truncate max-w-[260px]" title={`Model: ${currentModel.name}`}>
+          <span
+            className="text-xs text-muted-foreground truncate max-w-[260px]"
+            title={`Model: ${currentModel.name}`}
+          >
             {currentModel.name}
           </span>
         ) : (
@@ -477,7 +511,10 @@ export function ChatScreen() {
         )}
 
         {/* Thinking level */}
-        <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Thinking level">
+        <span
+          className="flex items-center gap-1 text-xs text-muted-foreground"
+          title="Thinking level"
+        >
           <Brain className="w-3.5 h-3.5" />
           <span className="capitalize">{thinkingLevel}</span>
         </span>
@@ -488,21 +525,24 @@ export function ChatScreen() {
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {items.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <Terminal className="w-12 h-12 mb-4 opacity-50" />
-            <p className="text-sm">Start a conversation with your AI assistant</p>
-            <p className="text-xs mt-2">Type a message and press Enter to begin</p>
-          </div>
-        )}
+      <div className="flex-1 overflow-y-auto p-4">
+        {/* Center the conversation in ~70% of the width (15% gutters each side). */}
+        <div className="mx-auto w-[70%] space-y-3">
+          {items.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+              <Terminal className="w-12 h-12 mb-4 opacity-50" />
+              <p className="text-sm">Start a conversation with your AI assistant</p>
+              <p className="text-xs mt-2">Type a message and press Enter to begin</p>
+            </div>
+          )}
 
-        {items
-          .filter((item) => isItemVisible(item, filters))
-          .map((item) => (
-            <ItemView key={item.id} item={item} filters={filters} />
-          ))}
-        <div ref={messagesEndRef} />
+          {items
+            .filter((item) => isItemVisible(item, filters))
+            .map((item) => (
+              <ItemView key={item.id} item={item} filters={filters} />
+            ))}
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Input */}
@@ -581,7 +621,11 @@ export function ChatScreen() {
             disabled={!input.trim() && pendingFiles.length === 0}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             aria-label={isStreaming ? "Queue message" : "Send message"}
-            title={isStreaming ? "Queue this message — delivered after the current assistant turn" : "Send message"}
+            title={
+              isStreaming
+                ? "Queue this message — delivered after the current assistant turn"
+                : "Send message"
+            }
           >
             <Send className="w-5 h-5" />
           </button>
@@ -722,24 +766,34 @@ function ItemView({ item, filters }: { item: ChatItem; filters: MessageFilters }
 
 function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[80%] bg-primary/20 text-foreground rounded-lg px-4 py-2">
+    <div className="flex justify-start">
+      <div className="w-full border-l-2 border-primary/50 pl-3 py-0.5 text-muted-foreground">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold uppercase">You</span>
-          <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
+          <span className="text-xs font-medium uppercase text-muted-foreground/70">You</span>
+          <span className="text-xs text-muted-foreground/70">
+            {formatTimestamp(item.timestamp)}
+          </span>
         </div>
-        <pre className="text-sm whitespace-pre-wrap font-mono">{item.text}</pre>
+        <pre className="text-xs whitespace-pre-wrap font-mono">{item.text}</pre>
       </div>
     </div>
   );
 }
 
-function AssistantItem({ item, filters }: { item: Extract<ChatItem, { kind: "assistant" }>; filters: MessageFilters }) {
+function AssistantItem({
+  item,
+  filters,
+}: {
+  item: Extract<ChatItem, { kind: "assistant" }>;
+  filters: MessageFilters;
+}) {
   // Block-level filtering: "Assistant" controls text blocks, "Thinking" controls reasoning.
-  const visibleBlocks = item.blocks.filter((b) => (b.type === "thinking" ? filters.thinking : filters.assistant));
+  const visibleBlocks = item.blocks.filter((b) =>
+    b.type === "thinking" ? filters.thinking : filters.assistant,
+  );
   return (
     <div className="flex justify-start">
-      <div className="max-w-[85%] bg-muted/50 text-foreground rounded-lg px-4 py-2 w-full sm:w-auto">
+      <div className="w-full text-foreground py-2">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold uppercase">Assistant</span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
@@ -752,7 +806,11 @@ function AssistantItem({ item, filters }: { item: Extract<ChatItem, { kind: "ass
         </div>
         <div className="space-y-2">
           {visibleBlocks.map((block, i) =>
-            block.type === "thinking" ? <ThinkingBlock key={i} block={block} /> : <TextBlock key={i} block={block} />,
+            block.type === "thinking" ? (
+              <ThinkingBlock key={i} block={block} />
+            ) : (
+              <TextBlock key={i} block={block} />
+            ),
           )}
         </div>
       </div>
@@ -761,35 +819,14 @@ function AssistantItem({ item, filters }: { item: Extract<ChatItem, { kind: "ass
 }
 
 // Render plain text while turning **double-asterisk** spans into bold.
-// Kept intentionally small; for full markdown (code blocks, links, lists)
-// consider swapping this for react-markdown — see note to the user.
-function renderBold(text: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const regex = /\*\*([\s\S]+?)\*\*/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
-    nodes.push(
-      <strong key={key++} className="font-bold">
-        {match[1]}
-      </strong>,
-    );
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
-  return nodes;
-}
-
 function TextBlock({ block }: { block: Extract<ContentBlock, { type: "text" }> }) {
   return (
-    <pre className="text-sm whitespace-pre-wrap break-words font-mono leading-relaxed">
-      {renderBold(block.text)}
+    <div className="break-words">
+      <Markdown>{block.text}</Markdown>
       {block.isStreaming && (
         <span className="inline-block w-[2px] h-4 align-text-bottom bg-primary cursor-blink ml-0.5" />
       )}
-    </pre>
+    </div>
   );
 }
 
@@ -806,7 +843,9 @@ function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinki
         aria-expanded={open}
         className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors select-none"
       >
-        <ChevronRight className={cn("w-3 h-3 shrink-0 transition-transform duration-200", open && "rotate-90")} />
+        <ChevronRight
+          className={cn("w-3 h-3 shrink-0 transition-transform duration-200", open && "rotate-90")}
+        />
         <Brain className={cn("w-3 h-3 shrink-0", block.isStreaming && "animate-pulse")} />
         <span>{block.isStreaming ? "Thinking…" : "Thought process"}</span>
       </button>
@@ -825,24 +864,73 @@ function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinki
 function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
   const [expanded, setExpanded] = useState(item.status === "error");
 
+  // Bash commands get a cleaner treatment: no wrench icon, no "Bash" label —
+  // just the command itself.
+  const isBash = item.toolName?.toLowerCase() === "bash";
+  // File-based tools (Read/Edit/Write) expose a `path`; keep the full path but
+  // surface the file name prominently so it's easy to scan the conversation.
+  const filePath = toolFilePath(item.toolName, item.args);
+
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%] bg-card border border-border rounded-lg px-3 py-2 w-full sm:w-auto">
-        <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs w-full text-left">
-          {item.status === "running" && <Loader2 className="w-3 h-3 animate-spin text-warning shrink-0" />}
+      <div className="w-full bg-card border border-border rounded-lg px-3 py-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 text-xs w-full text-left"
+        >
+          {item.status === "running" && (
+            <Loader2 className="w-3 h-3 animate-spin text-warning shrink-0" />
+          )}
           {item.status === "success" && <Check className="w-3 h-3 text-success shrink-0" />}
           {item.status === "error" && <X className="w-3 h-3 text-error shrink-0" />}
-          <Wrench className="w-3 h-3 text-primary shrink-0" />
-          <span className="font-semibold shrink-0">{item.toolName}</span>
+          {!isBash && !filePath && <Wrench className="w-3 h-3 text-primary shrink-0" />}
+          {!isBash && <span className="font-semibold shrink-0">{item.toolName}</span>}
           {(() => {
             const fa = firstArg(item.args);
             if (!fa) return null;
             const full = `${fa.key}: ${fa.value}`;
-            return (
-              <span className="text-muted-foreground truncate" title={full}>
-                {fa.key}: {middleEllipsis(fa.value)}
-              </span>
-            );
+            // Keep the full path visible but highlight just the file-name
+            // segment in a prominent white (e.g. dim "src/components/" + white
+            // "theme.tsx"). The directory is middle-ellipsized so the white
+            // file name stays visible even for deep paths.
+            if (filePath) {
+              return (
+                <span className="truncate" title={fa.value}>
+                  {filePath.dir && (
+                    <span className="text-muted-foreground">
+                      {middleEllipsis(filePath.dir, 48)}
+                    </span>
+                  )}
+                  <span className="text-foreground font-semibold">{filePath.base}</span>
+                </span>
+              );
+            }
+            // Bash: show just the command, no "command:" key prefix. Highlight
+            // any file/path inside it in white and dim the rest; if there's no
+            // path-like token, the whole command is the important part (white).
+            if (isBash) {
+              const highlighted = highlightImportant(fa.value, "text-muted-foreground");
+              return (
+                <span className="truncate font-mono" title={full}>
+                  {highlighted ?? (
+                    <span className="text-foreground font-semibold">
+                      {middleEllipsis(fa.value)}
+                    </span>
+                  )}
+                </span>
+              );
+            }
+            // Other tools: dim the key. Highlight a file/path inside the value
+            // in white; otherwise the whole value is the argument, shown orange.
+            {
+              const highlighted = highlightImportant(fa.value, "text-arg");
+              return (
+                <span className="truncate" title={full}>
+                  <span className="text-muted-foreground">{fa.key}: </span>
+                  {highlighted ?? <span className="text-arg">{middleEllipsis(fa.value)}</span>}
+                </span>
+              );
+            }
           })()}
         </button>
         {expanded && (
@@ -888,7 +976,7 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
 function SystemItem({ item }: { item: Extract<ChatItem, { kind: "system" }> }) {
   return (
     <div className="flex justify-start">
-      <div className="max-w-[80%] bg-warning/10 border border-warning/30 text-warning rounded-lg px-4 py-2">
+      <div className="w-full bg-warning/10 border border-warning/30 text-warning rounded-lg px-4 py-2">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold uppercase">System</span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
@@ -971,6 +1059,53 @@ function DiffView({ diff }: { diff: string }) {
 // Returns the first argument as { key, value } with the value fully stringified
 // (not truncated). Truncation for display happens at render time so the full
 // value is always available via the title tooltip and the expanded args pane.
+// For file-based tools (Read/Edit/Write), pull the `path` arg apart into its
+// directory prefix and base file name so the UI can keep the full path visible
+// while highlighting just the file name (e.g. "theme.tsx"). Returns null for
+// tools that don't operate on a path.
+function toolFilePath(
+  toolName: string | undefined,
+  args: unknown,
+): { dir: string; base: string } | null {
+  const fileTools = new Set(["read", "edit", "write"]);
+  if (!toolName || !fileTools.has(toolName.toLowerCase())) return null;
+  if (!args || typeof args !== "object") return null;
+  const path = (args as Record<string, unknown>).path;
+  if (typeof path !== "string" || !path) return null;
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return idx >= 0
+    ? { dir: path.slice(0, idx + 1), base: path.slice(idx + 1) || path }
+    : { dir: "", base: path };
+}
+
+// Does a single whitespace-delimited token look like a file or path?
+// (contains a slash, or ends in a short ".ext"). Surrounding quotes/punctuation
+// are stripped first so `"foo.ts",` still matches.
+function looksLikePath(token: string): boolean {
+  const s = token.replace(/^["'(<]+|["',);>]+$/g, "");
+  if (!s) return false;
+  return /[/\\]/.test(s) || /\.[A-Za-z0-9]{1,8}$/.test(s);
+}
+
+// Render a value string with any file/path-like tokens highlighted in a
+// prominent white, and everything else in `restClass`. Returns null when the
+// value contains no path-like token, so the caller can pick its own fallback.
+function highlightImportant(value: string, restClass: string): React.ReactNode | null {
+  if (!looksLikePath(value) && !value.split(/\s+/).some(looksLikePath)) return null;
+  // Split on whitespace but keep the separators so spacing is preserved.
+  return value.split(/(\s+)/).map((tok, i) =>
+    /\S/.test(tok) && looksLikePath(tok) ? (
+      <span key={i} className="text-foreground font-semibold">
+        {tok}
+      </span>
+    ) : (
+      <span key={i} className={restClass}>
+        {tok}
+      </span>
+    ),
+  );
+}
+
 function firstArg(args: unknown): { key: string; value: string } | null {
   if (!args || typeof args !== "object") return null;
   const obj = args as Record<string, unknown>;
@@ -990,6 +1125,18 @@ function middleEllipsis(s: string, max = 80): string {
   return `${flat.slice(0, head)}…${flat.slice(flat.length - tail)}`;
 }
 
+// Derive a short, human-readable title from the persisted session file path.
+// Pi SDK names sessions like `2026-05-30T20-15-12-abc123.json`; strip the
+// extension and any leading timestamp prefix so the header stays readable.
+function sessionTitle(sessionFile: string | undefined): string {
+  if (!sessionFile) return "New chat";
+  const base = sessionFile.split(/[\\/]/).pop() ?? sessionFile;
+  const noExt = base.replace(/\.json$/i, "");
+  // Drop ISO-ish timestamp prefix (e.g. "2026-05-30T20-15-12-") if present.
+  const trimmed = noExt.replace(/^\d{4}-\d{2}-\d{2}T[\d-]+-/, "");
+  return trimmed || noExt || "Session";
+}
+
 function safeStringify(v: unknown): string {
   try {
     return typeof v === "string" ? v : JSON.stringify(v, null, 2);
@@ -1003,7 +1150,9 @@ function formatResult(result: unknown): string {
   if (result && typeof result === "object") {
     const r = result as { content?: Array<{ type?: string; text?: string }> };
     if (Array.isArray(r.content)) {
-      return r.content.map((c) => (c.type === "text" && c.text ? c.text : safeStringify(c))).join("\n");
+      return r.content
+        .map((c) => (c.type === "text" && c.text ? c.text : safeStringify(c)))
+        .join("\n");
     }
   }
   return safeStringify(result);
