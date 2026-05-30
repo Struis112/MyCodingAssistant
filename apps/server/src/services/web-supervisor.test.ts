@@ -68,7 +68,9 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-async function newSupervisor(overrides: Partial<ConstructorParameters<typeof WebSupervisor>[0]> = {}) {
+async function newSupervisor(
+  overrides: Partial<ConstructorParameters<typeof WebSupervisor>[0]> = {},
+) {
   return new WebSupervisor({
     webDir: "/fake/web",
     port: 3000,
@@ -192,12 +194,16 @@ describe("WebSupervisor — child exit + backoff", () => {
     await sup.start();
     await flushMicrotasks();
 
-    // Crash 5 times — 100, 200, 400(capped to 250), 250, 250
+    // Crash 5 times — 100, 200, 400(capped to 250), 250, 250.
+    // Iterations are intentionally sequential: each restart timer only
+    // arms after the previous flush, so Promise.all() would be wrong here.
     const expectedDelays = [100, 200, 250, 250, 250];
     for (let i = 0; i < expectedDelays.length; i++) {
       spawnedChildren[i]!.emit("exit", 1, null);
+      // eslint-disable-next-line no-await-in-loop
       await flushMicrotasks();
       vi.advanceTimersByTime(expectedDelays[i]!);
+      // eslint-disable-next-line no-await-in-loop
       await flushMicrotasks();
     }
     // Initial + 5 restart spawns
@@ -212,10 +218,13 @@ describe("WebSupervisor — child exit + backoff", () => {
     await flushMicrotasks();
 
     // Three crashes in a row; maxRestarts=2 so the third should fail.
+    // Sequential by design (see note in "caps backoff at maxBackoffMs").
     for (let i = 0; i < 3; i++) {
       spawnedChildren[i]?.emit("exit", 1, null);
+      // eslint-disable-next-line no-await-in-loop
       await flushMicrotasks();
       vi.advanceTimersByTime(50 * Math.pow(2, i));
+      // eslint-disable-next-line no-await-in-loop
       await flushMicrotasks();
     }
     const status = sup.getStatus();
