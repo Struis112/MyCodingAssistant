@@ -18,11 +18,19 @@ function makePiStub(overrides: Partial<Record<string, unknown>> = {}) {
         model: undefined,
       },
     ]),
-    listPersistedSessions: vi.fn(async () => [{ id: "s1", path: "/tmp/s1.jsonl", name: "session 1", modifiedAt: 1 }]),
+    listPersistedSessions: vi.fn(async () => [
+      { id: "s1", path: "/tmp/s1.jsonl", name: "session 1", modifiedAt: 1 },
+    ]),
     newSession: vi.fn(async () => undefined),
     disposeSession: vi.fn(),
     getAvailableModels: vi.fn(async () => [
-      { id: "m1", name: "Model 1", provider: "anthropic", contextWindow: 200_000, reasoning: false },
+      {
+        id: "m1",
+        name: "Model 1",
+        provider: "anthropic",
+        contextWindow: 200_000,
+        reasoning: false,
+      },
     ]),
     ...overrides,
   } as unknown as Parameters<typeof registerApiRoutes>[1];

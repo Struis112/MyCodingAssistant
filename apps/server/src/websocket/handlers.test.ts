@@ -54,11 +54,17 @@ function makePiStub(session = makeSessionStub()) {
   return {
     getSession: vi.fn(() => session),
     getOrCreateSession: vi.fn(async () => session),
-    setSessionModel: vi.fn(async (_: string, p: string, id: string) => ({ id, name: "Model", provider: p })),
+    setSessionModel: vi.fn(async (_: string, p: string, id: string) => ({
+      id,
+      name: "Model",
+      provider: p,
+    })),
     setSessionThinkingLevel: vi.fn(),
     newSession: vi.fn(async () => session),
     resumeSession: vi.fn(async () => session),
-    listPersistedSessions: vi.fn(async () => [{ id: "s1", path: "/tmp/s1.jsonl", name: "Session", modifiedAt: 1 }]),
+    listPersistedSessions: vi.fn(async () => [
+      { id: "s1", path: "/tmp/s1.jsonl", name: "Session", modifiedAt: 1 },
+    ]),
     session,
   };
 }

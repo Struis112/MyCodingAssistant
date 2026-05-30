@@ -50,12 +50,18 @@ function ModelBadgePill({ kind }: { kind: ModelBadge }) {
 
 export function Settings() {
   const { theme, toggleTheme } = useTheme();
-  const { sessionId, currentModel, setCurrentModel, thinkingLevel, setThinkingLevel } = useAppStore();
+  const { sessionId, currentModel, setCurrentModel, thinkingLevel, setThinkingLevel } =
+    useAppStore();
 
   // Models load from SWR with localStorage cache, so the picker renders
   // instantly on subsequent visits and revalidates every 5 minutes in the
   // background. See lib/swr-provider.tsx + hooks/useModels.ts.
-  const { data: modelsData, isLoading: loading, mutate: refreshModels, error: modelsError } = useModels();
+  const {
+    data: modelsData,
+    isLoading: loading,
+    mutate: refreshModels,
+    error: modelsError,
+  } = useModels();
   const models = useMemo(() => modelsData ?? [], [modelsData]);
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -69,7 +75,10 @@ export function Settings() {
   // Listen for setModel acknowledgements
   useEffect(() => {
     const socket = getSocket();
-    const onModelChanged = (data: { sessionId: string; model: { id: string; name: string; provider: string } }) => {
+    const onModelChanged = (data: {
+      sessionId: string;
+      model: { id: string; name: string; provider: string };
+    }) => {
       if (data.sessionId !== sessionId) return;
       setCurrentModel(data.model);
       setBusyKey(null);
@@ -98,7 +107,10 @@ export function Settings() {
   }, [sessionId, setCurrentModel, setThinkingLevel]);
 
   // Sort models: last-used first, then best tier, then newest.
-  const sortedModels = useMemo(() => sortModels(models, currentModel?.id), [models, currentModel?.id]);
+  const sortedModels = useMemo(
+    () => sortModels(models, currentModel?.id),
+    [models, currentModel?.id],
+  );
 
   function handleModelChange(model: Model) {
     setBusyKey(`model:${model.id}`);
@@ -124,7 +136,9 @@ export function Settings() {
           </div>
           <p className="text-muted-foreground">Configure your coding assistant preferences</p>
           {statusMessage && (
-            <div className="mt-3 text-sm px-3 py-2 rounded bg-muted/50 border border-border">{statusMessage}</div>
+            <div className="mt-3 text-sm px-3 py-2 rounded bg-muted/50 border border-border">
+              {statusMessage}
+            </div>
           )}
         </div>
 
@@ -143,7 +157,9 @@ export function Settings() {
               >
                 Switch to {theme === "dark" ? "Light" : "Dark"} Mode
               </button>
-              <p className="text-sm text-muted-foreground mt-2">Current theme: {theme === "dark" ? "Dark" : "Light"}</p>
+              <p className="text-sm text-muted-foreground mt-2">
+                Current theme: {theme === "dark" ? "Dark" : "Light"}
+              </p>
             </div>
           </section>
 
@@ -184,11 +200,15 @@ export function Settings() {
                           </div>
                           <div className="text-sm text-muted-foreground">
                             {model.provider}
-                            {model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}K context` : ""}
+                            {model.contextWindow
+                              ? ` · ${Math.round(model.contextWindow / 1000)}K context`
+                              : ""}
                             {model.reasoning ? " · Reasoning" : ""}
                           </div>
                         </div>
-                        {isBusy && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+                        {isBusy && (
+                          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                        )}
                         {isSelected && !isBusy && <CheckCircle2 className="w-5 h-5 text-primary" />}
                       </label>
                     );
@@ -196,8 +216,8 @@ export function Settings() {
                 </div>
               ) : !loading ? (
                 <p className="text-muted-foreground text-sm">
-                  No models available. Check your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) or run{" "}
-                  <code>pi /login</code> to authenticate.
+                  No models available. Check your API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+                  or run <code>pi /login</code> to authenticate.
                 </p>
               ) : null}
             </div>
@@ -237,14 +257,16 @@ export function Settings() {
                       </div>
                     </div>
                     {isBusy && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
-                    {thinkingLevel === level && !isBusy && <CheckCircle2 className="w-5 h-5 text-primary" />}
+                    {thinkingLevel === level && !isBusy && (
+                      <CheckCircle2 className="w-5 h-5 text-primary" />
+                    )}
                   </label>
                 );
               })}
             </div>
             <p className="text-xs text-muted-foreground mt-3">
-              Only some models support extended thinking. If you see "thinking blocks cannot be modified" errors, set
-              this to <code>off</code> or start a new chat.
+              Only some models support extended thinking. If you see "thinking blocks cannot be
+              modified" errors, set this to <code>off</code> or start a new chat.
             </p>
           </section>
         </div>

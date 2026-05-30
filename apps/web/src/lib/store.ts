@@ -57,7 +57,7 @@ export function readPersistedUserPrefs(): {
   };
 }
 
-export type View = "chat" | "sessions" | "settings";
+export type View = "chat" | "settings";
 
 // ----- Chat items -----
 //
@@ -102,14 +102,6 @@ export interface ModelInfo {
   reasoning?: boolean;
 }
 
-export interface PersistedSession {
-  id: string;
-  path: string;
-  name: string;
-  modifiedAt: number;
-  messageCount?: number;
-}
-
 interface AppState {
   // View
   activeView: View;
@@ -132,10 +124,6 @@ interface AppState {
   setSessionId: (id: string) => void;
   sessionFile: string | undefined;
   setSessionFile: (path: string | undefined) => void;
-
-  // Persisted session list
-  persistedSessions: PersistedSession[];
-  setPersistedSessions: (sessions: PersistedSession[]) => void;
 
   // Model
   currentModel: ModelInfo | null;
@@ -161,7 +149,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       items: state.items.map((it) => (it.id === id ? update(it) : it)),
     })),
   findItem: (id) => get().items.find((it) => it.id === id),
-  findToolItemByCallId: (toolCallId) => get().items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
+  findToolItemByCallId: (toolCallId) =>
+    get().items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
   clearItems: () => set({ items: [] }),
   setItems: (items) => set({ items }),
 
@@ -172,9 +161,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSessionId: (id) => set({ sessionId: id }),
   sessionFile: undefined,
   setSessionFile: (path) => set({ sessionFile: path }),
-
-  persistedSessions: [],
-  setPersistedSessions: (sessions) => set({ persistedSessions: sessions }),
 
   // SSR-safe defaults. localStorage is read in AppShell's mount effect via
   // hydrateUserPrefs() so the server snapshot and the client's first render

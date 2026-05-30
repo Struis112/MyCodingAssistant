@@ -168,7 +168,9 @@ export class WebSupervisor extends EventEmitter {
     });
 
     proc.on("exit", (code, signal) => {
-      console.log(`[WebSupervisor] web exited code=${code} signal=${signal} (restarts=${this.restarts})`);
+      console.log(
+        `[WebSupervisor] web exited code=${code} signal=${signal} (restarts=${this.restarts})`,
+      );
       this.proc = null;
       if (!this.shouldRun) {
         this.setStatus({ state: "stopped" });
@@ -195,10 +197,15 @@ export class WebSupervisor extends EventEmitter {
       });
       return;
     }
-    const backoff = Math.min(this.opts.baseBackoffMs * 2 ** (this.restarts - 1), this.opts.maxBackoffMs);
+    const backoff = Math.min(
+      this.opts.baseBackoffMs * 2 ** (this.restarts - 1),
+      this.opts.maxBackoffMs,
+    );
     const nextRestartAt = Date.now() + backoff;
     this.setStatus({ state: "backoff", reason, restarts: this.restarts, nextRestartAt });
-    console.log(`[WebSupervisor] restart in ${backoff}ms (attempt ${this.restarts}, reason: ${reason})`);
+    console.log(
+      `[WebSupervisor] restart in ${backoff}ms (attempt ${this.restarts}, reason: ${reason})`,
+    );
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
       if (this.shouldRun) this.spawnNow();

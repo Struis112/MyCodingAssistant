@@ -12,7 +12,11 @@ type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 // multiple prompts.
 const eventSubscribers = new Map<string, () => void>();
 
-function attachEventForwarder(io: SocketIOServer, piSessionManager: PiSessionManager, sessionId: string): void {
+function attachEventForwarder(
+  io: SocketIOServer,
+  piSessionManager: PiSessionManager,
+  sessionId: string,
+): void {
   if (eventSubscribers.has(sessionId)) return;
   const session = piSessionManager.getSession(sessionId);
   if (!session) return;
@@ -38,7 +42,10 @@ function detachEventForwarder(sessionId: string): void {
   }
 }
 
-export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: PiSessionManager): void {
+export function registerWebSocketHandlers(
+  io: SocketIOServer,
+  piSessionManager: PiSessionManager,
+): void {
   io.on("connection", (socket: Socket) => {
     console.log(`[WS] Client connected: ${socket.id}`);
 
@@ -62,7 +69,9 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
       }) => {
         const { sessionId, message, behavior, images } = data;
         const imgCount = images?.length ?? 0;
-        console.log(`[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} imgs=${imgCount} from=${socket.id}`);
+        console.log(
+          `[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} imgs=${imgCount} from=${socket.id}`,
+        );
         try {
           await piSessionManager.getOrCreateSession(sessionId);
           attachEventForwarder(io, piSessionManager, sessionId);
@@ -96,7 +105,10 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
           }
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await session.prompt(message, (sdkImages.length > 0 ? { images: sdkImages } : undefined) as any);
+          await session.prompt(
+            message,
+            (sdkImages.length > 0 ? { images: sdkImages } : undefined) as any,
+          );
           io.emit("chat:done", { sessionId });
           console.log(`[WS] chat:done sid=${sessionId}`);
         } catch (err) {
@@ -194,29 +206,39 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
 
     // ----- Session settings -----
 
-    socket.on("session:setModel", async (data: { sessionId: string; provider: string; modelId: string }) => {
-      try {
-        await piSessionManager.getOrCreateSession(data.sessionId);
-        const model = await piSessionManager.setSessionModel(data.sessionId, data.provider, data.modelId);
-        io.emit("session:modelChanged", { sessionId: data.sessionId, model });
-        console.log(`[WS] Model set: ${data.provider}/${data.modelId}`);
-      } catch (err) {
-        socket.emit("session:error", { error: String(err) });
-      }
-    });
+    socket.on(
+      "session:setModel",
+      async (data: { sessionId: string; provider: string; modelId: string }) => {
+        try {
+          await piSessionManager.getOrCreateSession(data.sessionId);
+          const model = await piSessionManager.setSessionModel(
+            data.sessionId,
+            data.provider,
+            data.modelId,
+          );
+          io.emit("session:modelChanged", { sessionId: data.sessionId, model });
+          console.log(`[WS] Model set: ${data.provider}/${data.modelId}`);
+        } catch (err) {
+          socket.emit("session:error", { error: String(err) });
+        }
+      },
+    );
 
-    socket.on("session:setThinkingLevel", async (data: { sessionId: string; level: ThinkingLevel }) => {
-      try {
-        await piSessionManager.getOrCreateSession(data.sessionId);
-        piSessionManager.setSessionThinkingLevel(data.sessionId, data.level);
-        io.emit("session:thinkingLevelChanged", {
-          sessionId: data.sessionId,
-          level: data.level,
-        });
-      } catch (err) {
-        socket.emit("session:error", { error: String(err) });
-      }
-    });
+    socket.on(
+      "session:setThinkingLevel",
+      async (data: { sessionId: string; level: ThinkingLevel }) => {
+        try {
+          await piSessionManager.getOrCreateSession(data.sessionId);
+          piSessionManager.setSessionThinkingLevel(data.sessionId, data.level);
+          io.emit("session:thinkingLevelChanged", {
+            sessionId: data.sessionId,
+            level: data.level,
+          });
+        } catch (err) {
+          socket.emit("session:error", { error: String(err) });
+        }
+      },
+    );
 
     socket.on("disconnect", () => {
       console.log(`[WS] Client disconnected: ${socket.id}`);

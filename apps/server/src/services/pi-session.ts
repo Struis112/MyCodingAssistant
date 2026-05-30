@@ -100,7 +100,10 @@ export class PiSessionManager {
   }
 
   /** Change the thinking level on an existing session. */
-  setSessionThinkingLevel(sessionId: string, level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
+  setSessionThinkingLevel(
+    sessionId: string,
+    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
+  ): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     session.setThinkingLevel(level);

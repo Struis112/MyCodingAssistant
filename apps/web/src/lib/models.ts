@@ -70,7 +70,11 @@ export function sortModels<T extends ModelLike>(models: readonly T[], lastUsedId
 export type ModelBadge = "last-used" | "best" | "new";
 
 // Decide which badges to show next to each model in the picker.
-export function getBadges(model: ModelLike, allModels: readonly ModelLike[], lastUsedId?: string): ModelBadge[] {
+export function getBadges(
+  model: ModelLike,
+  allModels: readonly ModelLike[],
+  lastUsedId?: string,
+): ModelBadge[] {
   const badges: ModelBadge[] = [];
   if (lastUsedId && model.id === lastUsedId) badges.push("last-used");
   const maxTier = allModels.reduce((max, m) => Math.max(max, getModelTier(m)), 0);

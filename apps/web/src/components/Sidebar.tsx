@@ -15,7 +15,9 @@ const bottomNavItems = [{ id: "settings", icon: SettingsIcon, label: "Settings" 
 function navButtonClass(active: boolean): string {
   return cn(
     "w-10 h-10 rounded-lg flex items-center justify-center transition-colors",
-    active ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+    active
+      ? "bg-primary/20 text-primary"
+      : "text-muted-foreground hover:bg-muted hover:text-foreground",
   );
 }
 

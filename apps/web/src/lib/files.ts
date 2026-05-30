@@ -147,7 +147,10 @@ export async function makePendingFile(file: File): Promise<PendingFile> {
  * text-file attachments. Image attachments are NOT included here — they go
  * via the structured `images` field instead.
  */
-export function composeMessageWithAttachments(message: string, files: readonly PendingFile[]): string {
+export function composeMessageWithAttachments(
+  message: string,
+  files: readonly PendingFile[],
+): string {
   const textFiles = files.filter((f) => f.kind === "text" && f.text !== undefined);
   if (textFiles.length === 0) return message;
 
@@ -160,8 +163,12 @@ export function composeMessageWithAttachments(message: string, files: readonly P
 }
 
 /** PendingFiles in the shape the Pi SDK expects via `prompt(text, { images })`. */
-export function toSdkImages(files: readonly PendingFile[]): Array<{ data: string; mediaType: string }> {
-  return files.filter((f) => f.kind === "image" && f.base64).map((f) => ({ data: f.base64!, mediaType: f.mediaType }));
+export function toSdkImages(
+  files: readonly PendingFile[],
+): Array<{ data: string; mediaType: string }> {
+  return files
+    .filter((f) => f.kind === "image" && f.base64)
+    .map((f) => ({ data: f.base64!, mediaType: f.mediaType }));
 }
 
 export function formatBytes(bytes: number): string {
