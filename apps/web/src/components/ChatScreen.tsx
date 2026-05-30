@@ -55,23 +55,27 @@ export function ChatScreen() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
-        {/* Center the conversation in ~70% of the width (15% gutters each side). */}
-        <div className="mx-auto w-[70%] space-y-3">
-          {items.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-              <Terminal className="w-12 h-12 mb-4 opacity-50" />
-              <p className="text-sm">Start a conversation with your AI assistant</p>
-              <p className="text-xs mt-2">Type a message and press Enter to begin</p>
-            </div>
-          )}
-
-          {items
-            .filter((item) => isItemVisible(item, filters))
-            .map((item) => (
-              <ItemView key={item.id} item={item} filters={filters} />
-            ))}
-          <div ref={messagesEndRef} />
-        </div>
+        {items.length === 0 ? (
+          // Empty state: full-width + full-height so items-center/justify-center
+          // actually centers in both axes. Kept outside the 70% column wrapper
+          // because that wrapper is content-height (no slack to vertically
+          // center within).
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <Terminal className="w-12 h-12 mb-4 opacity-50" />
+            <p className="text-sm">Start a conversation with your AI assistant</p>
+            <p className="text-xs mt-2">Type a message and press Enter to begin</p>
+          </div>
+        ) : (
+          /* Center the conversation in ~70% of the width (15% gutters each side). */
+          <div className="mx-auto w-[70%] space-y-3">
+            {items
+              .filter((item) => isItemVisible(item, filters))
+              .map((item) => (
+                <ItemView key={item.id} item={item} filters={filters} />
+              ))}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
       </div>
 
       <Composer />
