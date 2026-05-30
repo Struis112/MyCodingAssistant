@@ -52,5 +52,8 @@ pids/
 *.sqlite
 *.sqlite3
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Pi sessions
 .pi/
