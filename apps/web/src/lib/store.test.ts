@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useAppStore, type ChatItem } from "./store";
+import {
+  readJSON,
+  readPersistedUserPrefs,
+  readString,
+  useAppStore,
+  writeJSON,
+  writeString,
+  type ChatItem,
+} from "./store";
 
 // Snapshot of pristine state we reset to between tests so each one starts
 // from the documented defaults regardless of order.
@@ -153,6 +161,59 @@ describe("useAppStore", () => {
       expect(useAppStore.getState().isStreaming).toBe(true);
       useAppStore.getState().setIsStreaming(false);
       expect(useAppStore.getState().isStreaming).toBe(false);
+    });
+  });
+});
+
+describe("localStorage helpers", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  describe("readString / writeString", () => {
+    it("writes and reads strings", () => {
+      writeString("k", "v");
+      expect(readString("k", "fallback")).toBe("v");
+    });
+
+    it("returns the fallback when the key is missing", () => {
+      expect(readString("missing", "fallback")).toBe("fallback");
+    });
+  });
+
+  describe("readJSON / writeJSON", () => {
+    it("round-trips JSON-serializable values", () => {
+      writeJSON("obj", { a: 1, b: ["x", "y"] });
+      expect(readJSON("obj", null)).toEqual({ a: 1, b: ["x", "y"] });
+    });
+
+    it("returns the fallback when the key is missing", () => {
+      expect(readJSON("missing", { fallback: true })).toEqual({ fallback: true });
+    });
+
+    it("returns the fallback when stored data is corrupt JSON", () => {
+      window.localStorage.setItem("corrupt", "{ not json");
+      expect(readJSON("corrupt", "fallback")).toBe("fallback");
+    });
+  });
+
+  describe("readPersistedUserPrefs", () => {
+    it("returns the documented defaults when localStorage is empty", () => {
+      const prefs = readPersistedUserPrefs();
+      expect(prefs.currentModel).toBeNull();
+      expect(prefs.thinkingLevel).toBe("off");
+    });
+
+    it("reads currentModel from the mca-model key", () => {
+      const model = { id: "x", name: "X", provider: "anthropic" };
+      writeJSON("mca-model", model);
+      const prefs = readPersistedUserPrefs();
+      expect(prefs.currentModel).toEqual(model);
+    });
+
+    it("reads thinkingLevel from the mca-thinking-level key", () => {
+      writeString("mca-thinking-level", "high");
+      expect(readPersistedUserPrefs().thinkingLevel).toBe("high");
     });
   });
 });

@@ -4,7 +4,29 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useAppStore, type ChatItem, type ContentBlock } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { generateId, formatTimestamp, cn } from "@/lib/utils";
-import { Send, Square, Trash2, Terminal, Wrench, Check, X, Loader2, Brain, Plus } from "lucide-react";
+import {
+  Send,
+  Square,
+  Terminal,
+  Wrench,
+  Check,
+  X,
+  Loader2,
+  Brain,
+  ChevronRight,
+  SlidersHorizontal,
+  Paperclip,
+  FileText,
+  Image as ImageIcon,
+  AlertCircle,
+} from "lucide-react";
+import {
+  composeMessageWithAttachments,
+  formatBytes,
+  makePendingFile,
+  toSdkImages,
+  type PendingFile,
+} from "@/lib/files";
 
 // ----- helpers to translate persisted AgentMessage[] into ChatItem[] -----
 
@@ -99,13 +121,23 @@ export function ChatScreen() {
     sessionFile,
     setSessionFile,
     currentModel,
-    setActiveView,
+    thinkingLevel,
   } = useAppStore();
 
   const [input, setInput] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [filters, setFilters] = useState<MessageFilters>({
+    assistant: true,
+    thinking: true,
+    tool: true,
+    system: true,
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
+  const dragCounterRef = useRef(0);
 
   // Auto-scroll
   useEffect(() => {
@@ -303,28 +335,112 @@ export function ChatScreen() {
 
   // ----- actions -----
 
+  // ----- File ingestion -----
+
+  const addFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const list = Array.from(files);
+      if (list.length === 0) return;
+      const processed = await Promise.all(list.map((f) => makePendingFile(f)));
+
+      // Surface any rejections as system items so the user knows why a file
+      // didn't attach.
+      const rejected = processed.filter((f) => f.kind === "unsupported");
+      const accepted = processed.filter((f) => f.kind !== "unsupported");
+      for (const r of rejected) {
+        addItem({
+          kind: "system",
+          id: generateId(),
+          text: `Skipped attachment "${r.name}": ${r.rejection}`,
+          timestamp: Date.now(),
+        });
+      }
+      if (accepted.length > 0) {
+        setPendingFiles((prev) => [...prev, ...accepted]);
+      }
+    },
+    [addItem],
+  );
+
+  const removeFile = useCallback((id: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
+  const onFilePickerChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (files && files.length > 0) addFiles(files);
+      // Reset the input so the same file can be re-attached after removing.
+      e.target.value = "";
+    },
+    [addFiles],
+  );
+
+  // Drag/drop handlers. Use a counter to avoid the flicker where entering
+  // a child element fires `dragleave` on the parent.
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.types.includes("Files")) {
+      dragCounterRef.current += 1;
+      setIsDragging(true);
+    }
+  }, []);
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDragging(false);
+  }, []);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) addFiles(files);
+    },
+    [addFiles],
+  );
+
+  // ----- Send -----
+
   const handleSend = useCallback(() => {
-    const text = input.trim();
-    if (!text) return;
-    // Optimistically render the user message. The server decides whether to
-    // route it as a fresh prompt or queue it as a `steer` based on whether
-    // the agent is currently streaming — either way we want the UI to feel
-    // continuous, so we never block typing or sending.
-    addItem({ kind: "user", id: generateId(), text, timestamp: Date.now() });
+    const trimmed = input.trim();
+    if (!trimmed && pendingFiles.length === 0) return;
+
+    const messageToSend = composeMessageWithAttachments(trimmed, pendingFiles);
+    const images = toSdkImages(pendingFiles);
+
+    // Optimistically render the user message. Show a short summary of any
+    // attachments so the user can see what was sent.
+    const attachmentSummary = pendingFiles.length
+      ? pendingFiles.map((f) => `· ${f.name} (${formatBytes(f.size)})`).join("\n")
+      : "";
+    const displayText = attachmentSummary
+      ? `${trimmed}${trimmed ? "\n\n" : ""}📎 ${pendingFiles.length} attachment${pendingFiles.length > 1 ? "s" : ""}:\n${attachmentSummary}`
+      : trimmed;
+
+    addItem({ kind: "user", id: generateId(), text: displayText, timestamp: Date.now() });
     if (!isStreaming) setIsStreaming(true);
-    getSocket().emit("chat:send", { sessionId, message: text });
+    getSocket().emit("chat:send", {
+      sessionId,
+      message: messageToSend,
+      images: images.length > 0 ? images : undefined,
+    });
     setInput("");
+    setPendingFiles([]);
     inputRef.current?.focus();
-  }, [input, isStreaming, sessionId, addItem, setIsStreaming]);
+  }, [input, pendingFiles, isStreaming, sessionId, addItem, setIsStreaming]);
 
   const handleAbort = useCallback(() => {
     getSocket().emit("chat:abort", { sessionId });
     setIsStreaming(false);
   }, [sessionId, setIsStreaming]);
-
-  const handleNewChat = useCallback(() => {
-    getSocket().emit("chat:new", { sessionId });
-  }, [sessionId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -337,35 +453,38 @@ export function ChatScreen() {
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <header className="h-12 border-b border-border flex items-center px-4 gap-3 shrink-0">
-        <Terminal className="w-5 h-5 text-primary" />
-        <h1 className="text-sm font-semibold text-foreground">Chat</h1>
-        {currentModel && <span className="text-xs text-muted-foreground hidden sm:inline">· {currentModel.name}</span>}
+        <h1 className="text-sm font-semibold text-foreground">Placeholder</h1>
+
+        {/* Harness: pi.dev logo.
+            Locked to the pi.dev branding color (black) inside a white circle
+            so it reads cleanly on both light and dark backgrounds — same
+            visual treatment as a browser favicon. */}
+        <span
+          className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-white text-black ring-1 ring-black/10"
+          title="Harness: Pi SDK"
+          aria-label="Harness: Pi SDK"
+        >
+          <img src="/pi-logo.svg" alt="" className="w-3 h-3" />
+        </span>
+
+        {/* Active model — between harness icon and thinking level */}
+        {currentModel ? (
+          <span className="text-xs text-muted-foreground truncate max-w-[260px]" title={`Model: ${currentModel.name}`}>
+            {currentModel.name}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground italic">no model</span>
+        )}
+
+        {/* Thinking level */}
+        <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Thinking level">
+          <Brain className="w-3.5 h-3.5" />
+          <span className="capitalize">{thinkingLevel}</span>
+        </span>
+
         <div className="flex-1" />
         {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
-        <button
-          onClick={() => setActiveView("sessions")}
-          className="p-2 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-          title="Browse sessions"
-          aria-label="Browse sessions"
-        >
-          <Terminal className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleNewChat}
-          className="p-2 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-          title="New chat"
-          aria-label="New chat"
-        >
-          <Plus className="w-4 h-4" />
-        </button>
-        <button
-          onClick={clearItems}
-          className="p-2 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-          title="Clear visible messages (does not delete persisted session)"
-          aria-label="Clear view"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <MessageFilterMenu filters={filters} onChange={setFilters} />
       </header>
 
       {/* Messages */}
@@ -378,15 +497,61 @@ export function ChatScreen() {
           </div>
         )}
 
-        {items.map((item) => (
-          <ItemView key={item.id} item={item} />
-        ))}
+        {items
+          .filter((item) => isItemVisible(item, filters))
+          .map((item) => (
+            <ItemView key={item.id} item={item} filters={filters} />
+          ))}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
-      <div className="border-t border-border p-4 shrink-0">
+      <div
+        className={cn(
+          "relative border-t p-4 shrink-0 transition-colors",
+          isDragging ? "border-primary bg-primary/5" : "border-border",
+        )}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {/* Drop-zone overlay */}
+        {isDragging && (
+          <div className="pointer-events-none absolute inset-2 rounded-lg border-2 border-dashed border-primary/60 bg-background/80 flex items-center justify-center text-sm font-medium text-primary">
+            Drop files here to attach
+          </div>
+        )}
+
+        {/* Pending-attachments row */}
+        {pendingFiles.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pendingFiles.map((f) => (
+              <PendingFileChip key={f.id} file={f} onRemove={() => removeFile(f.id)} />
+            ))}
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          onChange={onFilePickerChange}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+
         <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+            aria-label="Attach files"
+            title="Attach files (or drag files into this area)"
+          >
+            <Paperclip className="w-5 h-5" />
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -413,7 +578,7 @@ export function ChatScreen() {
           )}
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() && pendingFiles.length === 0}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             aria-label={isStreaming ? "Queue message" : "Send message"}
             title={isStreaming ? "Queue this message — delivered after the current assistant turn" : "Send message"}
@@ -428,12 +593,126 @@ export function ChatScreen() {
 
 // ===== Item rendering =====
 
-function ItemView({ item }: { item: ChatItem }) {
+// ===== Message filters =====
+
+export interface MessageFilters {
+  assistant: boolean;
+  thinking: boolean;
+  tool: boolean;
+  system: boolean;
+}
+
+const FILTER_OPTIONS: { key: keyof MessageFilters; label: string }[] = [
+  { key: "assistant", label: "Assistant" },
+  { key: "thinking", label: "Thinking" },
+  { key: "tool", label: "Tool" },
+  { key: "system", label: "System" },
+];
+
+// Decide whether a top-level item should render given the active filters.
+// User messages are always shown. Assistant items stay visible if either
+// their text or thinking content is enabled (block-level filtering happens
+// inside AssistantItem).
+function isItemVisible(item: ChatItem, filters: MessageFilters): boolean {
+  switch (item.kind) {
+    case "user":
+      return true;
+    case "tool":
+      return filters.tool;
+    case "system":
+      return filters.system;
+    case "assistant": {
+      const hasThinking = item.blocks.some((b) => b.type === "thinking");
+      const hasText = item.blocks.some((b) => b.type === "text");
+      if (item.blocks.length === 0) return filters.assistant; // streaming placeholder
+      return (filters.assistant && hasText) || (filters.thinking && hasThinking);
+    }
+  }
+}
+
+function MessageFilterMenu({
+  filters,
+  onChange,
+}: {
+  filters: MessageFilters;
+  onChange: (next: MessageFilters) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  const hiddenCount = FILTER_OPTIONS.filter((o) => !filters[o.key]).length;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={cn(
+          "flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors",
+          hiddenCount > 0
+            ? "border-primary/50 text-primary"
+            : "border-border text-muted-foreground hover:text-foreground hover:border-primary/40",
+        )}
+        title="Filter messages"
+      >
+        <SlidersHorizontal className="w-3.5 h-3.5" />
+        <span>Filters</span>
+        {hiddenCount > 0 && (
+          <span className="inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold">
+            {hiddenCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-card shadow-lg py-1"
+        >
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+            Show message types
+          </div>
+          {FILTER_OPTIONS.map((opt) => (
+            <label
+              key={opt.key}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-accent transition-colors"
+            >
+              <input
+                type="checkbox"
+                checked={filters[opt.key]}
+                onChange={(e) => onChange({ ...filters, [opt.key]: e.target.checked })}
+                className="accent-primary w-3.5 h-3.5"
+              />
+              <span className="text-foreground">{opt.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ItemView({ item, filters }: { item: ChatItem; filters: MessageFilters }) {
   switch (item.kind) {
     case "user":
       return <UserItem item={item} />;
     case "assistant":
-      return <AssistantItem item={item} />;
+      return <AssistantItem item={item} filters={filters} />;
     case "tool":
       return <ToolItem item={item} />;
     case "system":
@@ -455,7 +734,9 @@ function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   );
 }
 
-function AssistantItem({ item }: { item: Extract<ChatItem, { kind: "assistant" }> }) {
+function AssistantItem({ item, filters }: { item: Extract<ChatItem, { kind: "assistant" }>; filters: MessageFilters }) {
+  // Block-level filtering: "Assistant" controls text blocks, "Thinking" controls reasoning.
+  const visibleBlocks = item.blocks.filter((b) => (b.type === "thinking" ? filters.thinking : filters.assistant));
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%] bg-muted/50 text-foreground rounded-lg px-4 py-2 w-full sm:w-auto">
@@ -463,11 +744,14 @@ function AssistantItem({ item }: { item: Extract<ChatItem, { kind: "assistant" }
           <span className="text-xs font-semibold uppercase">Assistant</span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
           {item.isStreaming && item.blocks.length === 0 && (
-            <span className="inline-block w-2 h-4 bg-primary cursor-blink" />
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              thinking…
+            </span>
           )}
         </div>
         <div className="space-y-2">
-          {item.blocks.map((block, i) =>
+          {visibleBlocks.map((block, i) =>
             block.type === "thinking" ? <ThinkingBlock key={i} block={block} /> : <TextBlock key={i} block={block} />,
           )}
         </div>
@@ -476,28 +760,65 @@ function AssistantItem({ item }: { item: Extract<ChatItem, { kind: "assistant" }
   );
 }
 
+// Render plain text while turning **double-asterisk** spans into bold.
+// Kept intentionally small; for full markdown (code blocks, links, lists)
+// consider swapping this for react-markdown — see note to the user.
+function renderBold(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const regex = /\*\*([\s\S]+?)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    nodes.push(
+      <strong key={key++} className="font-bold">
+        {match[1]}
+      </strong>,
+    );
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+}
+
 function TextBlock({ block }: { block: Extract<ContentBlock, { type: "text" }> }) {
   return (
-    <pre className="text-sm whitespace-pre-wrap font-mono">
-      {block.text}
-      {block.isStreaming && <span className="inline-block w-2 h-4 bg-primary cursor-blink ml-0.5" />}
+    <pre className="text-sm whitespace-pre-wrap break-words font-mono leading-relaxed">
+      {renderBold(block.text)}
+      {block.isStreaming && (
+        <span className="inline-block w-[2px] h-4 align-text-bottom bg-primary cursor-blink ml-0.5" />
+      )}
     </pre>
   );
 }
 
 function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinking" }> }) {
+  // Thinking is expanded by default and stays expanded; users can still
+  // collapse it manually via the toggle.
+  const [open, setOpen] = useState(true);
+
   return (
-    <details className="text-xs text-muted-foreground">
-      <summary className="cursor-pointer flex items-center gap-1 select-none">
-        <Brain className="w-3 h-3" />
-        Thinking
-        {block.isStreaming && <span className="animate-pulse ml-1">...</span>}
-      </summary>
-      <pre className="whitespace-pre-wrap pl-4 mt-1 border-l-2 border-border italic">
-        {block.text}
-        {block.isStreaming && <span className="inline-block w-2 h-3 bg-muted-foreground cursor-blink ml-0.5" />}
-      </pre>
-    </details>
+    <div className="rounded-md border border-border/70 bg-accent/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors select-none"
+      >
+        <ChevronRight className={cn("w-3 h-3 shrink-0 transition-transform duration-200", open && "rotate-90")} />
+        <Brain className={cn("w-3 h-3 shrink-0", block.isStreaming && "animate-pulse")} />
+        <span>{block.isStreaming ? "Thinking…" : "Thought process"}</span>
+      </button>
+      {open && (
+        <pre className="whitespace-pre-wrap break-words text-xs italic text-muted-foreground px-3 pb-2.5 pt-0.5 ml-2 border-l-2 border-border/60 leading-relaxed">
+          {block.text}
+          {block.isStreaming && (
+            <span className="inline-block w-[2px] h-3 align-text-bottom bg-muted-foreground cursor-blink ml-0.5" />
+          )}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -512,8 +833,17 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
           {item.status === "success" && <Check className="w-3 h-3 text-success shrink-0" />}
           {item.status === "error" && <X className="w-3 h-3 text-error shrink-0" />}
           <Wrench className="w-3 h-3 text-primary shrink-0" />
-          <span className="font-semibold">{item.toolName}</span>
-          <span className="text-muted-foreground truncate">{argsSummary(item.args)}</span>
+          <span className="font-semibold shrink-0">{item.toolName}</span>
+          {(() => {
+            const fa = firstArg(item.args);
+            if (!fa) return null;
+            const full = `${fa.key}: ${fa.value}`;
+            return (
+              <span className="text-muted-foreground truncate" title={full}>
+                {fa.key}: {middleEllipsis(fa.value)}
+              </span>
+            );
+          })()}
         </button>
         {expanded && (
           <div className="mt-2 text-xs space-y-2">
@@ -523,19 +853,31 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
                 {safeStringify(item.args)}
               </pre>
             </div>
-            {item.result !== undefined && (
-              <div>
-                <div className="text-muted-foreground mb-1">result:</div>
-                <pre
-                  className={cn(
-                    "p-2 rounded font-mono whitespace-pre-wrap text-xs overflow-x-auto",
-                    item.isError ? "bg-error/10 text-error" : "bg-muted/30",
-                  )}
-                >
-                  {formatResult(item.result)}
-                </pre>
-              </div>
-            )}
+            {(() => {
+              const diff = getToolDiff(item.result);
+              if (diff && !item.isError) {
+                return (
+                  <div>
+                    <div className="text-muted-foreground mb-1">diff:</div>
+                    <DiffView diff={diff} />
+                  </div>
+                );
+              }
+              if (item.result === undefined) return null;
+              return (
+                <div>
+                  <div className="text-muted-foreground mb-1">result:</div>
+                  <pre
+                    className={cn(
+                      "p-2 rounded font-mono whitespace-pre-wrap text-xs overflow-x-auto",
+                      item.isError ? "bg-error/10 text-error" : "bg-muted/30",
+                    )}
+                  >
+                    {formatResult(item.result)}
+                  </pre>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -557,16 +899,95 @@ function SystemItem({ item }: { item: Extract<ChatItem, { kind: "system" }> }) {
   );
 }
 
+// ----- attachment chip -----
+
+function PendingFileChip({ file, onRemove }: { file: PendingFile; onRemove: () => void }) {
+  const Icon = file.kind === "image" ? ImageIcon : file.kind === "text" ? FileText : AlertCircle;
+  const tone =
+    file.kind === "unsupported"
+      ? "border-error/40 text-error bg-error/10"
+      : "border-border text-foreground bg-muted/40";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 max-w-[260px] pl-2 pr-1 py-1 rounded-md border text-xs ${tone}`}
+      title={`${file.name} · ${formatBytes(file.size)}`}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" />
+      <span className="truncate">{file.name}</span>
+      <span className="text-muted-foreground shrink-0">{formatBytes(file.size)}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-1 p-0.5 rounded hover:bg-background"
+        aria-label={`Remove ${file.name}`}
+        title="Remove"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    </span>
+  );
+}
+
+// ----- diff rendering -----
+
+// The SDK's `edit` tool returns details.diff: lines prefixed with
+// "+" (added), "-" (removed) or " " (unchanged/context), each followed by a
+// padded line number. We colour added=green, removed=red, context=muted.
+function getToolDiff(result: unknown): string | null {
+  if (result && typeof result === "object") {
+    const details = (result as { details?: unknown }).details;
+    if (details && typeof details === "object") {
+      const diff = (details as { diff?: unknown }).diff;
+      if (typeof diff === "string" && diff.trim()) return diff;
+    }
+  }
+  return null;
+}
+
+function DiffView({ diff }: { diff: string }) {
+  const lines = diff.replace(/\n$/, "").split("\n");
+  return (
+    <pre className="rounded border border-border font-mono text-xs leading-relaxed overflow-x-auto">
+      {lines.map((line, i) => {
+        const marker = line[0];
+        const cls =
+          marker === "+"
+            ? "bg-success/10 text-success"
+            : marker === "-"
+              ? "bg-error/10 text-error"
+              : "text-muted-foreground";
+        return (
+          <div key={i} className={cn("px-2 whitespace-pre", cls)}>
+            {line.length ? line : " "}
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
 // ----- formatting helpers -----
 
-function argsSummary(args: unknown): string {
-  if (!args || typeof args !== "object") return "";
+// Returns the first argument as { key, value } with the value fully stringified
+// (not truncated). Truncation for display happens at render time so the full
+// value is always available via the title tooltip and the expanded args pane.
+function firstArg(args: unknown): { key: string; value: string } | null {
+  if (!args || typeof args !== "object") return null;
   const obj = args as Record<string, unknown>;
-  const firstKey = Object.keys(obj)[0];
-  if (!firstKey) return "";
-  const v = obj[firstKey];
-  const s = typeof v === "string" ? v : safeStringify(v);
-  return `${firstKey}: ${s.slice(0, 60)}${s.length > 60 ? "…" : ""}`;
+  const key = Object.keys(obj)[0];
+  if (!key) return null;
+  const v = obj[key];
+  return { key, value: typeof v === "string" ? v : safeStringify(v) };
+}
+
+// Truncate in the middle so the meaningful tail (e.g. a file name) stays
+// visible: "C:/Users/…/message-preview.html".
+function middleEllipsis(s: string, max = 80): string {
+  const flat = s.replace(/\s+/g, " ");
+  if (flat.length <= max) return flat;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${flat.slice(0, head)}…${flat.slice(flat.length - tail)}`;
 }
 
 function safeStringify(v: unknown): string {

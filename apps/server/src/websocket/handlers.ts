@@ -49,6 +49,8 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
       async (data: {
         sessionId: string;
         message: string;
+        /** Optional base64 image attachments (from frontend drag/drop). */
+        images?: Array<{ data: string; mediaType: string }>;
         /**
          * Optional queue behavior when the agent is already streaming.
          * 'steer' (default): delivered after the current assistant turn finishes
@@ -58,14 +60,34 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
          */
         behavior?: "steer" | "followUp";
       }) => {
-        const { sessionId, message, behavior } = data;
-        console.log(`[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} from=${socket.id}`);
+        const { sessionId, message, behavior, images } = data;
+        const imgCount = images?.length ?? 0;
+        console.log(`[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} imgs=${imgCount} from=${socket.id}`);
         try {
           await piSessionManager.getOrCreateSession(sessionId);
           attachEventForwarder(io, piSessionManager, sessionId);
           const session = piSessionManager.getSession(sessionId)!;
 
+          // Pi SDK expects images in `ImageContent` shape. The shape is
+          // documented in the SDK as { type: 'image', source: { type: 'base64',
+          // mediaType, data } }. We build it as `any` to avoid pulling the
+          // SDK's narrow MediaType union (which would reject arbitrary mime
+          // strings users could drop in).
+          const sdkImages = (images || []).map((img) => ({
+            type: "image",
+            source: { type: "base64", mediaType: img.mediaType, data: img.data },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          })) as any;
+
           if (session.isStreaming) {
+            // While streaming, images can't be attached to a queued message;
+            // tell the user if they tried and fall through to text-only steer.
+            if (sdkImages.length > 0) {
+              io.emit("chat:error", {
+                sessionId,
+                error: "Image attachments are ignored when the agent is already streaming.",
+              });
+            }
             const mode: "steer" | "followUp" = behavior === "followUp" ? "followUp" : "steer";
             if (mode === "followUp") await session.followUp(message);
             else await session.steer(message);
@@ -73,7 +95,8 @@ export function registerWebSocketHandlers(io: SocketIOServer, piSessionManager: 
             return;
           }
 
-          await session.prompt(message);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await session.prompt(message, (sdkImages.length > 0 ? { images: sdkImages } : undefined) as any);
           io.emit("chat:done", { sessionId });
           console.log(`[WS] chat:done sid=${sessionId}`);
         } catch (err) {

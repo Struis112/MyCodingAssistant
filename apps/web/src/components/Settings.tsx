@@ -1,54 +1,70 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTheme } from "@/lib/theme";
 import { getSocket } from "@/lib/socket";
 import { useAppStore } from "@/lib/store";
-import { Settings as SettingsIcon, Palette, Brain, Cpu, CheckCircle2, Loader2 } from "lucide-react";
+import { getBadges, sortModels, type ModelBadge } from "@/lib/models";
+import { useModels, type Model } from "@/hooks/useModels";
+import {
+  Settings as SettingsIcon,
+  Palette,
+  Brain,
+  Cpu,
+  CheckCircle2,
+  Loader2,
+  Star,
+  Sparkles,
+  History,
+  RefreshCw,
+} from "lucide-react";
 
-interface Model {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
+function ModelBadgePill({ kind }: { kind: ModelBadge }) {
+  const config: Record<ModelBadge, { icon: typeof Star; label: string; className: string }> = {
+    best: {
+      icon: Star,
+      label: "Best",
+      className: "bg-primary/15 text-primary border-primary/30",
+    },
+    new: {
+      icon: Sparkles,
+      label: "New",
+      className: "bg-success/15 text-success border-success/30",
+    },
+    "last-used": {
+      icon: History,
+      label: "Last used",
+      className: "bg-muted text-muted-foreground border-border",
+    },
+  };
+  const { icon: Icon, label, className } = config[kind];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium border rounded ${className}`}
+    >
+      <Icon className="w-3 h-3" />
+      {label}
+    </span>
+  );
 }
-
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001";
 
 export function Settings() {
   const { theme, toggleTheme } = useTheme();
-  const { sessionId, currentModel, setCurrentModel } = useAppStore();
-  const [models, setModels] = useState<Model[]>([]);
-  const [thinkingLevel, setThinkingLevel] = useState<string>("off");
-  const [loading, setLoading] = useState(false);
+  const { sessionId, currentModel, setCurrentModel, thinkingLevel, setThinkingLevel } = useAppStore();
+
+  // Models load from SWR with localStorage cache, so the picker renders
+  // instantly on subsequent visits and revalidates every 5 minutes in the
+  // background. See lib/swr-provider.tsx + hooks/useModels.ts.
+  const { data: modelsData, isLoading: loading, mutate: refreshModels, error: modelsError } = useModels();
+  const models = useMemo(() => modelsData ?? [], [modelsData]);
+
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Fetch available models on mount
+  // Surface SWR fetch errors as the status message.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const r = await fetch(`${SERVER_URL}/api/models`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = (await r.json()) as Model[];
-        if (cancelled) return;
-        setModels(data);
-        if (!currentModel && data.length > 0) {
-          // Don't set on the server, just hint the UI selection
-        }
-      } catch (err) {
-        if (!cancelled) setStatusMessage(`Could not load models: ${String(err)}`);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentModel]);
+    if (modelsError) setStatusMessage(`Could not load models: ${String(modelsError)}`);
+  }, [modelsError]);
 
   // Listen for setModel acknowledgements
   useEffect(() => {
@@ -79,7 +95,10 @@ export function Settings() {
       socket.off("session:thinkingLevelChanged", onThinkingChanged);
       socket.off("session:error", onError);
     };
-  }, [sessionId, setCurrentModel]);
+  }, [sessionId, setCurrentModel, setThinkingLevel]);
+
+  // Sort models: last-used first, then best tier, then newest.
+  const sortedModels = useMemo(() => sortModels(models, currentModel?.id), [models, currentModel?.id]);
 
   function handleModelChange(model: Model) {
     setBusyKey(`model:${model.id}`);
@@ -124,9 +143,7 @@ export function Settings() {
               >
                 Switch to {theme === "dark" ? "Light" : "Dark"} Mode
               </button>
-              <p className="text-sm text-muted-foreground mt-2">
-                Current theme: {theme === "dark" ? "Dark" : "Light"} (WCAG AAA compliant)
-              </p>
+              <p className="text-sm text-muted-foreground mt-2">Current theme: {theme === "dark" ? "Dark" : "Light"}</p>
             </div>
           </section>
 
@@ -140,9 +157,10 @@ export function Settings() {
             <div>
               {models.length > 0 ? (
                 <div className="space-y-2 max-h-[420px] overflow-y-auto pr-2">
-                  {models.map((model) => {
+                  {sortedModels.map((model) => {
                     const isSelected = currentModel?.id === model.id;
                     const isBusy = busyKey === `model:${model.id}`;
+                    const badges = getBadges(model, models, currentModel?.id);
                     return (
                       <label
                         key={`${model.provider}:${model.id}`}
@@ -157,8 +175,13 @@ export function Settings() {
                           className="w-4 h-4"
                           disabled={isBusy}
                         />
-                        <div className="flex-1">
-                          <div className="font-medium text-card-foreground">{model.name}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="font-medium text-card-foreground">{model.name}</div>
+                            {badges.map((b) => (
+                              <ModelBadgePill key={b} kind={b} />
+                            ))}
+                          </div>
                           <div className="text-sm text-muted-foreground">
                             {model.provider}
                             {model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}K context` : ""}

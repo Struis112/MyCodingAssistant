@@ -5,7 +5,9 @@ import express from "express";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
+import path from "node:path";
 import { PiSessionManager } from "./services/pi-session.js";
+import { WebSupervisor, type WebStatus } from "./services/web-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 
@@ -31,28 +33,79 @@ const io = new SocketIOServer(httpServer, {
 // Core service — the Pi SDK lives in-process here.
 const piSessionManager = new PiSessionManager();
 
+// Optional: keep the Next.js web server alive across crashes / updates.
+// Off by default so `npm run dev:server` doesn't fight `npm run dev:web`.
+// `start-prod.ts` flips MCA_SUPERVISE_WEB=1 for `npm run start`.
+const webPort = parseInt(process.env.WEB_PORT || "3000", 10);
+const webDir = process.env.MCA_WEB_DIR || path.resolve(process.cwd(), "..", "web");
+
+const webSupervisor = process.env.MCA_SUPERVISE_WEB === "1" ? new WebSupervisor({ webDir, port: webPort }) : null;
+
 // Health check
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    web: webSupervisor?.getStatus() ?? { state: "disabled" },
   });
+});
+
+// Web supervisor status + manual control
+app.get("/api/web/status", (_req, res) => {
+  res.json(webSupervisor?.getStatus() ?? { state: "disabled" });
+});
+
+app.post("/api/web/restart", async (_req, res) => {
+  if (!webSupervisor) {
+    res.status(400).json({
+      error: "Web supervisor is not running. Start the server with MCA_SUPERVISE_WEB=1 (or `npm run start`).",
+    });
+    return;
+  }
+  try {
+    await webSupervisor.restart();
+    res.json({ success: true, status: webSupervisor.getStatus() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
 });
 
 registerApiRoutes(app, piSessionManager);
 registerWebSocketHandlers(io, piSessionManager);
 
+// Forward web supervisor status to all connected clients so a future UI
+// can show a small indicator.
+if (webSupervisor) {
+  webSupervisor.on("status", (status: WebStatus) => {
+    io.emit("web:status", status);
+  });
+}
+
 httpServer.listen(PORT, HOST, () => {
   console.log(`[MCA Server] Running on http://${HOST}:${PORT}`);
   console.log("[MCA Server] WebSocket ready for frontend connections");
+  if (webSupervisor) {
+    console.log(`[MCA Server] Web supervisor enabled — will keep port ${webPort} alive`);
+    void webSupervisor.start();
+  } else {
+    console.log("[MCA Server] Web supervisor disabled (set MCA_SUPERVISE_WEB=1 to enable)");
+  }
 });
 
-process.on("SIGINT", async () => {
+async function shutdown() {
   console.log("\n[MCA Server] Shutting down...");
+  if (webSupervisor) {
+    await webSupervisor.stop().catch(() => {});
+  }
   piSessionManager.disposeAll();
   httpServer.close(() => {
     console.log("[MCA Server] Stopped");
     process.exit(0);
   });
-});
+  // Hard-exit after 8s if something hangs
+  setTimeout(() => process.exit(1), 8_000).unref();
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

@@ -1,11 +1,3 @@
-# Contributing to MyCodingAssistant
-
-Thanks for being here. This document covers how the project is structured,
-the local dev workflow, and the conventions PRs need to follow before they
-get merged.
-
-## TL;DR
-
 ```bash
 git clone https://github.com/Struis112/MyCodingAssistant.git
 cd MyCodingAssistant

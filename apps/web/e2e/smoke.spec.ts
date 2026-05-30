@@ -4,10 +4,8 @@ test.describe("smoke", () => {
   test("root URL renders the chat shell", async ({ page }) => {
     await page.goto("/");
 
-    // Three sidebar nav buttons exist (exact match — chat header has
-    // "New chat" / "Browse sessions" which would otherwise alias).
+    // Two sidebar nav buttons (Chat + Settings).
     await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sessions", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
 
     // Chat input + send button
@@ -31,9 +29,6 @@ test.describe("smoke", () => {
 
   test("sidebar navigation switches main view", async ({ page }) => {
     await page.goto("/");
-
-    await page.getByRole("button", { name: "Sessions", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();

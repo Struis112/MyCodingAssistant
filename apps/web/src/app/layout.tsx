@@ -1,5 +1,6 @@
-import { ThemeProvider } from "@/lib/theme";
 import type { Metadata } from "next";
+import { ThemeProvider } from "@/lib/theme";
+import { SWRProvider } from "@/lib/swr-provider";
 import "@/styles/globals.css";
 
 export const metadata: Metadata = {
@@ -32,7 +33,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="antialiased" suppressHydrationWarning>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <SWRProvider>{children}</SWRProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

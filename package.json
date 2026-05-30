@@ -20,6 +20,8 @@
     "dev:web": "npm run dev --workspace=@mca/web",
     "dev:server": "npm run dev --workspace=@mca/server",
     "build": "npm run build --workspaces",
+    "start": "npm run build && npm --workspace=@mca/server run start:prod",
+    "start:server": "npm --workspace=@mca/server run start:prod",
     "test": "npm run test --workspaces --if-present",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:e2e": "npm run test:e2e --workspace=@mca/web",
