@@ -55,5 +55,11 @@ pids/
 # TypeScript incremental build cache
 *.tsbuildinfo
 
+# Test outputs
+coverage/
+playwright-report/
+test-results/
+.last-run.json
+
 # Pi sessions
 .pi/
