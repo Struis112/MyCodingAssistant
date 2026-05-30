@@ -1,3 +1,4 @@
 - Chat uses PI SDK with streaming text (codeblocks, reasoning and all other info)
-- Frontend is Next.js and React
+- Frontend is Next.js and React (Idiomatically)
 - light/dark theme with WCAG 2.2 AAA contrast.
+- Don't add features I didn't ask for, but always **suggest better options and improvements**

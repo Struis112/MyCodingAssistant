@@ -1,0 +1,29 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default
+  require_changes: false
+
+ignore:
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.config.{ts,js,mjs,cjs}"
+  - "apps/web/.next/**"
+  - "apps/web/e2e/**"
+  - "apps/web/src/app/**"
+  - "apps/server/src/index.ts"
+  - "node_modules/**"
+  - "**/dist/**"
+  - "coverage/**"

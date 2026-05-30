@@ -1,21 +1,10 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useAppStore, type ChatItem, type ContentBlock } from '@/lib/store';
-import { getSocket } from '@/lib/socket';
-import { generateId, formatTimestamp, cn } from '@/lib/utils';
-import {
-  Send,
-  Square,
-  Trash2,
-  Terminal,
-  Wrench,
-  Check,
-  X,
-  Loader2,
-  Brain,
-  Plus,
-} from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useAppStore, type ChatItem, type ContentBlock } from "@/lib/store";
+import { getSocket } from "@/lib/socket";
+import { generateId, formatTimestamp, cn } from "@/lib/utils";
+import { Send, Square, Trash2, Terminal, Wrench, Check, X, Loader2, Brain, Plus } from "lucide-react";
 
 // ----- helpers to translate persisted AgentMessage[] into ChatItem[] -----
 
@@ -38,59 +27,56 @@ interface RawMessage {
 }
 
 function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .filter((c) => c && typeof c === 'object' && (c as RawContentBlock).type === 'text')
-      .map((c) => (c as RawContentBlock).text || '')
-      .join('');
+      .filter((c) => c && typeof c === "object" && (c as RawContentBlock).type === "text")
+      .map((c) => (c as RawContentBlock).text || "")
+      .join("");
   }
-  return '';
+  return "";
 }
 
 function agentMessagesToChatItems(messages: RawMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   for (const msg of messages || []) {
     const ts = msg.timestamp || Date.now();
-    if (msg.role === 'user') {
+    if (msg.role === "user") {
       const text = extractText(msg.content);
-      if (text) items.push({ kind: 'user', id: generateId(), text, timestamp: ts });
-    } else if (msg.role === 'assistant') {
+      if (text) items.push({ kind: "user", id: generateId(), text, timestamp: ts });
+    } else if (msg.role === "assistant") {
       const blocks: ContentBlock[] = [];
       const content = Array.isArray(msg.content) ? (msg.content as RawContentBlock[]) : [];
       for (const c of content) {
-        if (c.type === 'text' && c.text) blocks.push({ type: 'text', text: c.text });
-        else if (c.type === 'thinking' && c.thinking)
-          blocks.push({ type: 'thinking', text: c.thinking });
-        else if (c.type === 'toolCall' && c.id && c.name) {
+        if (c.type === "text" && c.text) blocks.push({ type: "text", text: c.text });
+        else if (c.type === "thinking" && c.thinking) blocks.push({ type: "thinking", text: c.thinking });
+        else if (c.type === "toolCall" && c.id && c.name) {
           items.push({
-            kind: 'tool',
+            kind: "tool",
             id: generateId(),
             toolCallId: c.id,
             toolName: c.name,
             args: c.arguments,
-            status: 'success',
+            status: "success",
             timestamp: ts,
           });
         }
       }
       if (blocks.length > 0) {
         items.push({
-          kind: 'assistant',
+          kind: "assistant",
           id: generateId(),
           blocks,
           timestamp: ts,
           isStreaming: false,
         });
       }
-    } else if (msg.role === 'toolResult' && msg.toolCallId) {
-      const target = items.find(
-        (it) => it.kind === 'tool' && it.toolCallId === msg.toolCallId
-      );
-      if (target && target.kind === 'tool') {
+    } else if (msg.role === "toolResult" && msg.toolCallId) {
+      const target = items.find((it) => it.kind === "tool" && it.toolCallId === msg.toolCallId);
+      if (target && target.kind === "tool") {
         target.result = msg.content;
         target.isError = !!msg.isError;
-        target.status = msg.isError ? 'error' : 'success';
+        target.status = msg.isError ? "error" : "success";
       }
     }
   }
@@ -116,14 +102,14 @@ export function ChatScreen() {
     setActiveView,
   } = useAppStore();
 
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
 
   // Auto-scroll
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [items]);
 
   // ----- SDK event handler -----
@@ -134,14 +120,14 @@ export function ChatScreen() {
     const onEvent = (data: { sessionId: string; event: any }) => {
       if (data.sessionId !== sessionId) return;
       const ev = data.event;
-      if (!ev || typeof ev !== 'object') return;
+      if (!ev || typeof ev !== "object") return;
 
       // ---- assistant message lifecycle ----
-      if (ev.type === 'message_start' && ev.message?.role === 'assistant') {
+      if (ev.type === "message_start" && ev.message?.role === "assistant") {
         const id = generateId();
         currentAssistantIdRef.current = id;
         addItem({
-          kind: 'assistant',
+          kind: "assistant",
           id,
           blocks: [],
           timestamp: Date.now(),
@@ -150,17 +136,14 @@ export function ChatScreen() {
         return;
       }
 
-      if (ev.type === 'message_update') {
+      if (ev.type === "message_update") {
         const sub = ev.assistantMessageEvent;
         const currentId = currentAssistantIdRef.current;
         if (!sub || !currentId) return;
 
-        const appendToLastBlock = (
-          blockType: 'text' | 'thinking',
-          delta: string
-        ) => {
+        const appendToLastBlock = (blockType: "text" | "thinking", delta: string) => {
           updateItem(currentId, (it) => {
-            if (it.kind !== 'assistant') return it;
+            if (it.kind !== "assistant") return it;
             const blocks = [...it.blocks];
             let idx = -1;
             for (let i = blocks.length - 1; i >= 0; i--) {
@@ -179,94 +162,90 @@ export function ChatScreen() {
           });
         };
 
-        const finishBlock = (blockType: 'text' | 'thinking') => {
+        const finishBlock = (blockType: "text" | "thinking") => {
           updateItem(currentId, (it) => {
-            if (it.kind !== 'assistant') return it;
+            if (it.kind !== "assistant") return it;
             const blocks = it.blocks.map((b) =>
-              b.type === blockType && b.isStreaming ? { ...b, isStreaming: false } : b
+              b.type === blockType && b.isStreaming ? { ...b, isStreaming: false } : b,
             );
             return { ...it, blocks };
           });
         };
 
         switch (sub.type) {
-          case 'text_start':
+          case "text_start":
             updateItem(currentId, (it) =>
-              it.kind === 'assistant'
-                ? { ...it, blocks: [...it.blocks, { type: 'text', text: '', isStreaming: true }] }
-                : it
+              it.kind === "assistant"
+                ? { ...it, blocks: [...it.blocks, { type: "text", text: "", isStreaming: true }] }
+                : it,
             );
             return;
-          case 'text_delta':
-            appendToLastBlock('text', sub.delta || '');
+          case "text_delta":
+            appendToLastBlock("text", sub.delta || "");
             return;
-          case 'text_end':
-            finishBlock('text');
+          case "text_end":
+            finishBlock("text");
             return;
-          case 'thinking_start':
+          case "thinking_start":
             updateItem(currentId, (it) =>
-              it.kind === 'assistant'
-                ? { ...it, blocks: [...it.blocks, { type: 'thinking', text: '', isStreaming: true }] }
-                : it
+              it.kind === "assistant"
+                ? { ...it, blocks: [...it.blocks, { type: "thinking", text: "", isStreaming: true }] }
+                : it,
             );
             return;
-          case 'thinking_delta':
-            appendToLastBlock('thinking', sub.delta || '');
+          case "thinking_delta":
+            appendToLastBlock("thinking", sub.delta || "");
             return;
-          case 'thinking_end':
-            finishBlock('thinking');
+          case "thinking_end":
+            finishBlock("thinking");
             return;
         }
         return;
       }
 
-      if (ev.type === 'message_end') {
+      if (ev.type === "message_end") {
         const currentId = currentAssistantIdRef.current;
         if (currentId) {
-          updateItem(currentId, (it) =>
-            it.kind === 'assistant' ? { ...it, isStreaming: false } : it
-          );
+          updateItem(currentId, (it) => (it.kind === "assistant" ? { ...it, isStreaming: false } : it));
         }
         currentAssistantIdRef.current = null;
         return;
       }
 
       // ---- tool execution lifecycle ----
-      if (ev.type === 'tool_execution_start') {
+      if (ev.type === "tool_execution_start") {
         if (findToolItemByCallId(ev.toolCallId)) return;
         addItem({
-          kind: 'tool',
+          kind: "tool",
           id: generateId(),
           toolCallId: ev.toolCallId,
           toolName: ev.toolName,
           args: ev.args,
-          status: 'running',
+          status: "running",
           timestamp: Date.now(),
         });
         return;
       }
 
-      if (ev.type === 'tool_execution_update') {
+      if (ev.type === "tool_execution_update") {
         const existing = findToolItemByCallId(ev.toolCallId);
-        if (!existing || existing.kind !== 'tool') return;
-        updateItem(existing.id, (it) =>
-          it.kind === 'tool' ? { ...it, result: ev.partialResult } : it
-        );
+        if (!existing || existing.kind !== "tool") return;
+        updateItem(existing.id, (it) => (it.kind === "tool" ? { ...it, result: ev.partialResult } : it));
         return;
       }
 
-      if (ev.type === 'tool_execution_end') {
+      if (ev.type === "tool_execution_end") {
         const existing = findToolItemByCallId(ev.toolCallId);
-        if (!existing || existing.kind !== 'tool') return;
+        if (!existing || existing.kind !== "tool") return;
         updateItem(existing.id, (it) =>
-          it.kind === 'tool'
+          it.kind === "tool"
             ? {
                 ...it,
                 result: ev.result,
                 isError: !!ev.isError,
-                status: ev.isError ? 'error' : 'success',
+                status: ev.isError ? "error" : "success",
               }
-            : it
+            : it,
         );
         return;
       }
@@ -278,9 +257,7 @@ export function ChatScreen() {
       // Defensive: any lingering streaming blocks get finalized
       const current = currentAssistantIdRef.current;
       if (current) {
-        updateItem(current, (it) =>
-          it.kind === 'assistant' ? { ...it, isStreaming: false } : it
-        );
+        updateItem(current, (it) => (it.kind === "assistant" ? { ...it, isStreaming: false } : it));
         currentAssistantIdRef.current = null;
       }
     };
@@ -288,7 +265,7 @@ export function ChatScreen() {
     const onError = (data: { sessionId: string; error: string }) => {
       if (data.sessionId !== sessionId) return;
       addItem({
-        kind: 'system',
+        kind: "system",
         id: generateId(),
         text: `Error: ${data.error}`,
         timestamp: Date.now(),
@@ -296,11 +273,7 @@ export function ChatScreen() {
       setIsStreaming(false);
     };
 
-    const onResumed = (data: {
-      sessionId: string;
-      sessionFile?: string;
-      messages?: RawMessage[];
-    }) => {
+    const onResumed = (data: { sessionId: string; sessionFile?: string; messages?: RawMessage[] }) => {
       if (data.sessionId !== sessionId) return;
       setSessionFile(data.sessionFile);
       const restored = agentMessagesToChatItems(data.messages || []);
@@ -313,29 +286,20 @@ export function ChatScreen() {
       clearItems();
     };
 
-    socket.on('chat:event', onEvent);
-    socket.on('chat:done', onDone);
-    socket.on('chat:error', onError);
-    socket.on('chat:resumed', onResumed);
-    socket.on('chat:new', onNew);
+    socket.on("chat:event", onEvent);
+    socket.on("chat:done", onDone);
+    socket.on("chat:error", onError);
+    socket.on("chat:resumed", onResumed);
+    socket.on("chat:new", onNew);
 
     return () => {
-      socket.off('chat:event', onEvent);
-      socket.off('chat:done', onDone);
-      socket.off('chat:error', onError);
-      socket.off('chat:resumed', onResumed);
-      socket.off('chat:new', onNew);
+      socket.off("chat:event", onEvent);
+      socket.off("chat:done", onDone);
+      socket.off("chat:error", onError);
+      socket.off("chat:resumed", onResumed);
+      socket.off("chat:new", onNew);
     };
-  }, [
-    sessionId,
-    addItem,
-    updateItem,
-    findToolItemByCallId,
-    setIsStreaming,
-    setItems,
-    clearItems,
-    setSessionFile,
-  ]);
+  }, [sessionId, addItem, updateItem, findToolItemByCallId, setIsStreaming, setItems, clearItems, setSessionFile]);
 
   // ----- actions -----
 
@@ -346,24 +310,24 @@ export function ChatScreen() {
     // route it as a fresh prompt or queue it as a `steer` based on whether
     // the agent is currently streaming — either way we want the UI to feel
     // continuous, so we never block typing or sending.
-    addItem({ kind: 'user', id: generateId(), text, timestamp: Date.now() });
+    addItem({ kind: "user", id: generateId(), text, timestamp: Date.now() });
     if (!isStreaming) setIsStreaming(true);
-    getSocket().emit('chat:send', { sessionId, message: text });
-    setInput('');
+    getSocket().emit("chat:send", { sessionId, message: text });
+    setInput("");
     inputRef.current?.focus();
   }, [input, isStreaming, sessionId, addItem, setIsStreaming]);
 
   const handleAbort = useCallback(() => {
-    getSocket().emit('chat:abort', { sessionId });
+    getSocket().emit("chat:abort", { sessionId });
     setIsStreaming(false);
   }, [sessionId, setIsStreaming]);
 
   const handleNewChat = useCallback(() => {
-    getSocket().emit('chat:new', { sessionId });
+    getSocket().emit("chat:new", { sessionId });
   }, [sessionId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -375,17 +339,11 @@ export function ChatScreen() {
       <header className="h-12 border-b border-border flex items-center px-4 gap-3 shrink-0">
         <Terminal className="w-5 h-5 text-primary" />
         <h1 className="text-sm font-semibold text-foreground">Chat</h1>
-        {currentModel && (
-          <span className="text-xs text-muted-foreground hidden sm:inline">
-            · {currentModel.name}
-          </span>
-        )}
+        {currentModel && <span className="text-xs text-muted-foreground hidden sm:inline">· {currentModel.name}</span>}
         <div className="flex-1" />
-        {isStreaming && (
-          <span className="text-xs text-warning animate-pulse">● Streaming...</span>
-        )}
+        {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
         <button
-          onClick={() => setActiveView('sessions')}
+          onClick={() => setActiveView("sessions")}
           className="p-2 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
           title="Browse sessions"
           aria-label="Browse sessions"
@@ -436,8 +394,8 @@ export function ChatScreen() {
             onKeyDown={handleKeyDown}
             placeholder={
               isStreaming
-                ? 'Queue a message... (Enter to steer, Shift+Enter for newline)'
-                : 'Type your message... (Enter to send, Shift+Enter for newline)'
+                ? "Queue a message... (Enter to steer, Shift+Enter for newline)"
+                : "Type your message... (Enter to send, Shift+Enter for newline)"
             }
             className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none min-h-[44px] max-h-[200px] transition-colors"
             rows={1}
@@ -457,12 +415,8 @@ export function ChatScreen() {
             onClick={handleSend}
             disabled={!input.trim()}
             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label={isStreaming ? 'Queue message' : 'Send message'}
-            title={
-              isStreaming
-                ? 'Queue this message — delivered after the current assistant turn'
-                : 'Send message'
-            }
+            aria-label={isStreaming ? "Queue message" : "Send message"}
+            title={isStreaming ? "Queue this message — delivered after the current assistant turn" : "Send message"}
           >
             <Send className="w-5 h-5" />
           </button>
@@ -476,26 +430,24 @@ export function ChatScreen() {
 
 function ItemView({ item }: { item: ChatItem }) {
   switch (item.kind) {
-    case 'user':
+    case "user":
       return <UserItem item={item} />;
-    case 'assistant':
+    case "assistant":
       return <AssistantItem item={item} />;
-    case 'tool':
+    case "tool":
       return <ToolItem item={item} />;
-    case 'system':
+    case "system":
       return <SystemItem item={item} />;
   }
 }
 
-function UserItem({ item }: { item: Extract<ChatItem, { kind: 'user' }> }) {
+function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   return (
     <div className="flex justify-end">
       <div className="max-w-[80%] bg-primary/20 text-foreground rounded-lg px-4 py-2">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold uppercase">You</span>
-          <span className="text-xs text-muted-foreground">
-            {formatTimestamp(item.timestamp)}
-          </span>
+          <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
         </div>
         <pre className="text-sm whitespace-pre-wrap font-mono">{item.text}</pre>
       </div>
@@ -503,26 +455,20 @@ function UserItem({ item }: { item: Extract<ChatItem, { kind: 'user' }> }) {
   );
 }
 
-function AssistantItem({ item }: { item: Extract<ChatItem, { kind: 'assistant' }> }) {
+function AssistantItem({ item }: { item: Extract<ChatItem, { kind: "assistant" }> }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%] bg-muted/50 text-foreground rounded-lg px-4 py-2 w-full sm:w-auto">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold uppercase">Assistant</span>
-          <span className="text-xs text-muted-foreground">
-            {formatTimestamp(item.timestamp)}
-          </span>
+          <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
           {item.isStreaming && item.blocks.length === 0 && (
             <span className="inline-block w-2 h-4 bg-primary cursor-blink" />
           )}
         </div>
         <div className="space-y-2">
           {item.blocks.map((block, i) =>
-            block.type === 'thinking' ? (
-              <ThinkingBlock key={i} block={block} />
-            ) : (
-              <TextBlock key={i} block={block} />
-            )
+            block.type === "thinking" ? <ThinkingBlock key={i} block={block} /> : <TextBlock key={i} block={block} />,
           )}
         </div>
       </div>
@@ -530,22 +476,16 @@ function AssistantItem({ item }: { item: Extract<ChatItem, { kind: 'assistant' }
   );
 }
 
-function TextBlock({ block }: { block: Extract<ContentBlock, { type: 'text' }> }) {
+function TextBlock({ block }: { block: Extract<ContentBlock, { type: "text" }> }) {
   return (
     <pre className="text-sm whitespace-pre-wrap font-mono">
       {block.text}
-      {block.isStreaming && (
-        <span className="inline-block w-2 h-4 bg-primary cursor-blink ml-0.5" />
-      )}
+      {block.isStreaming && <span className="inline-block w-2 h-4 bg-primary cursor-blink ml-0.5" />}
     </pre>
   );
 }
 
-function ThinkingBlock({
-  block,
-}: {
-  block: Extract<ContentBlock, { type: 'thinking' }>;
-}) {
+function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinking" }> }) {
   return (
     <details className="text-xs text-muted-foreground">
       <summary className="cursor-pointer flex items-center gap-1 select-none">
@@ -555,31 +495,22 @@ function ThinkingBlock({
       </summary>
       <pre className="whitespace-pre-wrap pl-4 mt-1 border-l-2 border-border italic">
         {block.text}
-        {block.isStreaming && (
-          <span className="inline-block w-2 h-3 bg-muted-foreground cursor-blink ml-0.5" />
-        )}
+        {block.isStreaming && <span className="inline-block w-2 h-3 bg-muted-foreground cursor-blink ml-0.5" />}
       </pre>
     </details>
   );
 }
 
-function ToolItem({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
-  const [expanded, setExpanded] = useState(item.status === 'error');
+function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
+  const [expanded, setExpanded] = useState(item.status === "error");
 
   return (
     <div className="flex justify-start">
       <div className="max-w-[90%] bg-card border border-border rounded-lg px-3 py-2 w-full sm:w-auto">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 text-xs w-full text-left"
-        >
-          {item.status === 'running' && (
-            <Loader2 className="w-3 h-3 animate-spin text-warning shrink-0" />
-          )}
-          {item.status === 'success' && (
-            <Check className="w-3 h-3 text-success shrink-0" />
-          )}
-          {item.status === 'error' && <X className="w-3 h-3 text-error shrink-0" />}
+        <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs w-full text-left">
+          {item.status === "running" && <Loader2 className="w-3 h-3 animate-spin text-warning shrink-0" />}
+          {item.status === "success" && <Check className="w-3 h-3 text-success shrink-0" />}
+          {item.status === "error" && <X className="w-3 h-3 text-error shrink-0" />}
           <Wrench className="w-3 h-3 text-primary shrink-0" />
           <span className="font-semibold">{item.toolName}</span>
           <span className="text-muted-foreground truncate">{argsSummary(item.args)}</span>
@@ -597,8 +528,8 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
                 <div className="text-muted-foreground mb-1">result:</div>
                 <pre
                   className={cn(
-                    'p-2 rounded font-mono whitespace-pre-wrap text-xs overflow-x-auto',
-                    item.isError ? 'bg-error/10 text-error' : 'bg-muted/30'
+                    "p-2 rounded font-mono whitespace-pre-wrap text-xs overflow-x-auto",
+                    item.isError ? "bg-error/10 text-error" : "bg-muted/30",
                   )}
                 >
                   {formatResult(item.result)}
@@ -612,15 +543,13 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: 'tool' }> }) {
   );
 }
 
-function SystemItem({ item }: { item: Extract<ChatItem, { kind: 'system' }> }) {
+function SystemItem({ item }: { item: Extract<ChatItem, { kind: "system" }> }) {
   return (
     <div className="flex justify-start">
       <div className="max-w-[80%] bg-warning/10 border border-warning/30 text-warning rounded-lg px-4 py-2">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-semibold uppercase">System</span>
-          <span className="text-xs text-muted-foreground">
-            {formatTimestamp(item.timestamp)}
-          </span>
+          <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
         </div>
         <pre className="text-sm whitespace-pre-wrap font-mono">{item.text}</pre>
       </div>
@@ -631,31 +560,29 @@ function SystemItem({ item }: { item: Extract<ChatItem, { kind: 'system' }> }) {
 // ----- formatting helpers -----
 
 function argsSummary(args: unknown): string {
-  if (!args || typeof args !== 'object') return '';
+  if (!args || typeof args !== "object") return "";
   const obj = args as Record<string, unknown>;
   const firstKey = Object.keys(obj)[0];
-  if (!firstKey) return '';
+  if (!firstKey) return "";
   const v = obj[firstKey];
-  const s = typeof v === 'string' ? v : safeStringify(v);
-  return `${firstKey}: ${s.slice(0, 60)}${s.length > 60 ? '…' : ''}`;
+  const s = typeof v === "string" ? v : safeStringify(v);
+  return `${firstKey}: ${s.slice(0, 60)}${s.length > 60 ? "…" : ""}`;
 }
 
 function safeStringify(v: unknown): string {
   try {
-    return typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+    return typeof v === "string" ? v : JSON.stringify(v, null, 2);
   } catch {
     return String(v);
   }
 }
 
 function formatResult(result: unknown): string {
-  if (typeof result === 'string') return result;
-  if (result && typeof result === 'object') {
+  if (typeof result === "string") return result;
+  if (result && typeof result === "object") {
     const r = result as { content?: Array<{ type?: string; text?: string }> };
     if (Array.isArray(r.content)) {
-      return r.content
-        .map((c) => (c.type === 'text' && c.text ? c.text : safeStringify(c)))
-        .join('\n');
+      return r.content.map((c) => (c.type === "text" && c.text ? c.text : safeStringify(c))).join("\n");
     }
   }
   return safeStringify(result);

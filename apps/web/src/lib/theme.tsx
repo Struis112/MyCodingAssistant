@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-type Theme = 'light' | 'dark';
+type Theme = "light" | "dark";
 
 interface ThemeContextType {
   theme: Theme;
@@ -15,8 +15,8 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 // Read the theme that the pre-hydration inline script (in layout.tsx) wrote
 // onto <html>. Falling back to 'dark' if anything is off.
 function getInitialTheme(): Theme {
-  if (typeof document === 'undefined') return 'dark';
-  return document.documentElement.classList.contains('light') ? 'light' : 'dark';
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.classList.contains("light") ? "light" : "dark";
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -27,47 +27,45 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Keep theme in sync with OS preference when the user hasn't explicitly chosen.
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (e: MediaQueryListEvent) => {
-      const stored = localStorage.getItem('mca-theme');
+      const stored = localStorage.getItem("mca-theme");
       if (!stored) {
-        setThemeState(e.matches ? 'dark' : 'light');
+        setThemeState(e.matches ? "dark" : "light");
       }
     };
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
   }, []);
 
   // Apply theme to <html> when it changes.
   useEffect(() => {
-    document.documentElement.classList.remove('light', 'dark');
+    document.documentElement.classList.remove("light", "dark");
     document.documentElement.classList.add(theme);
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
+  const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
     try {
-      localStorage.setItem('mca-theme', newTheme);
+      localStorage.setItem("mca-theme", newTheme);
     } catch {
       /* private mode / quota — ignore */
     }
-  };
+  }, []);
 
-  const toggleTheme = () => {
-    setTheme(theme === 'dark' ? 'light' : 'dark');
-  };
+  const toggleTheme = useCallback(() => {
+    setTheme(theme === "dark" ? "light" : "dark");
+  }, [theme, setTheme]);
 
-  return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  const value = useMemo(() => ({ theme, toggleTheme, setTheme }), [theme, toggleTheme, setTheme]);
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
   const context = useContext(ThemeContext);
   if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider');
+    throw new Error("useTheme must be used within a ThemeProvider");
   }
   return context;
 }

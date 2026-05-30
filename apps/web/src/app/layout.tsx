@@ -1,10 +1,10 @@
-import { ThemeProvider } from '@/lib/theme';
-import type { Metadata } from 'next';
-import '@/styles/globals.css';
+import { ThemeProvider } from "@/lib/theme";
+import type { Metadata } from "next";
+import "@/styles/globals.css";
 
 export const metadata: Metadata = {
-  title: 'MyCodingAssistant',
-  description: 'Self-learning AI coding assistant',
+  title: "MyCodingAssistant",
+  description: "Self-learning AI coding assistant",
 };
 
 // Inline script: runs synchronously before React hydrates, sets the theme

@@ -1,7 +1,7 @@
 // Global state management with Zustand
-import { create } from 'zustand';
+import { create } from "zustand";
 
-export type View = 'chat' | 'sessions' | 'settings';
+export type View = "chat" | "sessions" | "settings";
 
 // ----- Chat items -----
 //
@@ -13,30 +13,30 @@ export type View = 'chat' | 'sessions' | 'settings';
 // or tool_execution_* event maps to a block/item update.
 
 export type ContentBlock =
-  | { type: 'text'; text: string; isStreaming?: boolean }
-  | { type: 'thinking'; text: string; isStreaming?: boolean };
+  | { type: "text"; text: string; isStreaming?: boolean }
+  | { type: "thinking"; text: string; isStreaming?: boolean };
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string; timestamp: number }
+  | { kind: "user"; id: string; text: string; timestamp: number }
   | {
-      kind: 'assistant';
+      kind: "assistant";
       id: string;
       blocks: ContentBlock[];
       timestamp: number;
       isStreaming: boolean;
     }
   | {
-      kind: 'tool';
+      kind: "tool";
       id: string;
       toolCallId: string;
       toolName: string;
       args: unknown;
       result?: unknown;
       isError?: boolean;
-      status: 'running' | 'success' | 'error';
+      status: "running" | "success" | "error";
       timestamp: number;
     }
-  | { kind: 'system'; id: string; text: string; timestamp: number };
+  | { kind: "system"; id: string; text: string; timestamp: number };
 
 export interface ModelInfo {
   id: string;
@@ -91,7 +91,7 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  activeView: 'chat',
+  activeView: "chat",
   setActiveView: (view) => set({ activeView: view }),
 
   items: [],
@@ -101,15 +101,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       items: state.items.map((it) => (it.id === id ? update(it) : it)),
     })),
   findItem: (id) => get().items.find((it) => it.id === id),
-  findToolItemByCallId: (toolCallId) =>
-    get().items.find((it) => it.kind === 'tool' && it.toolCallId === toolCallId),
+  findToolItemByCallId: (toolCallId) => get().items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
   clearItems: () => set({ items: [] }),
   setItems: (items) => set({ items }),
 
   isStreaming: false,
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
 
-  sessionId: 'default',
+  sessionId: "default",
   setSessionId: (id) => set({ sessionId: id }),
   sessionFile: undefined,
   setSessionFile: (path) => set({ sessionFile: path }),

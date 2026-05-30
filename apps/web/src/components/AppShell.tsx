@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import { ChatScreen } from '@/components/ChatScreen';
-import { Settings } from '@/components/Settings';
-import { SessionsView } from '@/components/SessionsView';
-import { Sidebar } from '@/components/Sidebar';
-import { useAppStore } from '@/lib/store';
-import { getSocket } from '@/lib/socket';
+import { useEffect } from "react";
+import { ChatScreen } from "@/components/ChatScreen";
+import { Settings } from "@/components/Settings";
+import { SessionsView } from "@/components/SessionsView";
+import { Sidebar } from "@/components/Sidebar";
+import { useAppStore } from "@/lib/store";
+import { getSocket } from "@/lib/socket";
 
 export function AppShell() {
   const { activeView, sessionId, setCurrentModel } = useAppStore();
@@ -16,7 +16,7 @@ export function AppShell() {
     const socket = getSocket();
 
     const sendInit = () => {
-      socket.emit('chat:state', { sessionId });
+      socket.emit("chat:state", { sessionId });
     };
 
     const onState = (data: {
@@ -29,14 +29,14 @@ export function AppShell() {
       if (data.state?.model) setCurrentModel(data.state.model);
     };
 
-    socket.on('connect', sendInit);
-    socket.on('chat:state:result', onState);
+    socket.on("connect", sendInit);
+    socket.on("chat:state:result", onState);
 
     if (socket.connected) sendInit();
 
     return () => {
-      socket.off('connect', sendInit);
-      socket.off('chat:state:result', onState);
+      socket.off("connect", sendInit);
+      socket.off("chat:state:result", onState);
     };
   }, [sessionId, setCurrentModel]);
 
@@ -44,9 +44,9 @@ export function AppShell() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden">
-        {activeView === 'chat' && <ChatScreen />}
-        {activeView === 'sessions' && <SessionsView />}
-        {activeView === 'settings' && <Settings />}
+        {activeView === "chat" && <ChatScreen />}
+        {activeView === "sessions" && <SessionsView />}
+        {activeView === "settings" && <Settings />}
       </main>
     </div>
   );

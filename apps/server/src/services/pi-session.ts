@@ -9,7 +9,7 @@ import {
   ModelRegistry,
   SessionManager,
   type AgentSession,
-} from '@earendil-works/pi-coding-agent';
+} from "@earendil-works/pi-coding-agent";
 
 export interface SessionInfo {
   id: string;
@@ -49,7 +49,7 @@ export class PiSessionManager {
    */
   async getOrCreateSession(
     sessionId: string,
-    options: { sessionFile?: string; continueRecent?: boolean } = {}
+    options: { sessionFile?: string; continueRecent?: boolean } = {},
   ): Promise<AgentSession> {
     const existing = this.sessions.get(sessionId);
     if (existing) return existing;
@@ -87,7 +87,7 @@ export class PiSessionManager {
   async setSessionModel(
     sessionId: string,
     provider: string,
-    modelId: string
+    modelId: string,
   ): Promise<{ id: string; name: string; provider: string }> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
@@ -100,10 +100,7 @@ export class PiSessionManager {
   }
 
   /** Change the thinking level on an existing session. */
-  setSessionThinkingLevel(
-    sessionId: string,
-    level: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
-  ): void {
+  setSessionThinkingLevel(sessionId: string, level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
     session.setThinkingLevel(level);
@@ -127,10 +124,9 @@ export class PiSessionManager {
       const raw: any[] = await (SessionManager as any).list(this.cwd);
       return (raw || []).map((entry: any) => ({
         id: entry.id || entry.sessionId || entry.path || String(entry),
-        path: entry.path || entry.filePath || entry.file || '',
-        name: entry.name || entry.displayName || entry.title || 'Untitled',
-        modifiedAt:
-          entry.modifiedAt || entry.mtime || entry.updatedAt || Date.now(),
+        path: entry.path || entry.filePath || entry.file || "",
+        name: entry.name || entry.displayName || entry.title || "Untitled",
+        modifiedAt: entry.modifiedAt || entry.mtime || entry.updatedAt || Date.now(),
         messageCount: entry.messageCount,
       }));
     } catch {

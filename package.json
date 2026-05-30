@@ -2,7 +2,15 @@
   "name": "my-coding-assistant",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-learning AI coding assistant with microservice architecture",
+  "description": "Local web chat UI on top of the Pi coding-agent SDK",
+  "keywords": [
+    "ai",
+    "chat",
+    "coding-assistant",
+    "pi-sdk"
+  ],
+  "license": "MIT",
+  "author": "Struis112",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -12,26 +20,33 @@
     "dev:web": "npm run dev --workspace=@mca/web",
     "dev:server": "npm run dev --workspace=@mca/server",
     "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces",
-    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspace=@mca/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "oxlint apps packages",
+    "lint:fix": "oxlint apps packages --fix",
+    "format": "oxfmt apps packages",
+    "format:check": "oxfmt apps packages --check",
     "clean": "npm run clean --workspaces && rm -rf node_modules",
+    "prepare": "husky || true",
     "pi": "pi",
     "pi:list": "pi list",
     "pi:update": "pi update",
     "pi:install": "pi install"
   },
-  "keywords": [
-    "ai",
-    "coding-assistant",
-    "pi-sdk",
-    "microservices"
-  ],
-  "author": "Struis112",
-  "license": "MIT",
   "devDependencies": {
-    "prettier": "^3.2.5",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.6",
+    "oxfmt": "^0.52.0",
+    "oxlint": "^1.67.0",
     "typescript": "^5.4.5"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json}": [
+      "oxfmt",
+      "oxlint --fix"
+    ]
   },
   "engines": {
     "node": ">=22.0.0",

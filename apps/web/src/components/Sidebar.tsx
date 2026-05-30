@@ -1,23 +1,16 @@
-'use client';
+"use client";
 
-import { useEffect } from 'react';
-import { useAppStore } from '@/lib/store';
-import { connectSocket, getSocket } from '@/lib/socket';
-import { cn } from '@/lib/utils';
-import {
-  MessageSquare,
-  FolderOpen,
-  Settings as SettingsIcon,
-  Bot,
-  Wifi,
-  WifiOff,
-} from 'lucide-react';
-import { ThemeToggle } from './ThemeToggle';
+import { useEffect } from "react";
+import { useAppStore } from "@/lib/store";
+import { connectSocket, getSocket } from "@/lib/socket";
+import { cn } from "@/lib/utils";
+import { MessageSquare, FolderOpen, Settings as SettingsIcon, Bot, Wifi, WifiOff } from "lucide-react";
+import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
-  { id: 'chat', icon: MessageSquare, label: 'Chat' },
-  { id: 'sessions', icon: FolderOpen, label: 'Sessions' },
-  { id: 'settings', icon: SettingsIcon, label: 'Settings' },
+  { id: "chat", icon: MessageSquare, label: "Chat" },
+  { id: "sessions", icon: FolderOpen, label: "Sessions" },
+  { id: "settings", icon: SettingsIcon, label: "Settings" },
 ] as const;
 
 export function Sidebar() {
@@ -25,12 +18,12 @@ export function Sidebar() {
 
   useEffect(() => {
     const socket = getSocket();
-    socket.on('connect', () => setIsConnected(true));
-    socket.on('disconnect', () => setIsConnected(false));
+    socket.on("connect", () => setIsConnected(true));
+    socket.on("disconnect", () => setIsConnected(false));
     connectSocket();
     return () => {
-      socket.off('connect');
-      socket.off('disconnect');
+      socket.off("connect");
+      socket.off("disconnect");
     };
   }, [setIsConnected]);
 
@@ -49,14 +42,14 @@ export function Sidebar() {
               key={item.id}
               onClick={() => setActiveView(item.id)}
               className={cn(
-                'w-10 h-10 rounded-lg flex items-center justify-center transition-colors',
+                "w-10 h-10 rounded-lg flex items-center justify-center transition-colors",
                 activeView === item.id
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  ? "bg-primary/20 text-primary"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               title={item.label}
               aria-label={item.label}
-              aria-current={activeView === item.id ? 'page' : undefined}
+              aria-current={activeView === item.id ? "page" : undefined}
             >
               <Icon className="w-5 h-5" />
             </button>
@@ -72,9 +65,7 @@ export function Sidebar() {
         ) : (
           <WifiOff className="w-5 h-5 text-error" aria-label="Disconnected" />
         )}
-        <span className="text-[10px] text-muted-foreground">
-          {isConnected ? 'Online' : 'Offline'}
-        </span>
+        <span className="text-[10px] text-muted-foreground">{isConnected ? "Online" : "Offline"}</span>
       </div>
     </aside>
   );
