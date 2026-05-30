@@ -25,13 +25,21 @@ function patch(file: File, text: string, bytes: Uint8Array): File {
   return file;
 }
 
+// Newer TS lib types narrow `BlobPart` to `Uint8Array<ArrayBuffer>` while
+// `new Uint8Array(n)` widens to `Uint8Array<ArrayBufferLike>` (it could be a
+// SharedArrayBuffer). At runtime these are interchangeable; we cast to keep
+// the test fixtures readable.
+function toBlobPart(bytes: Uint8Array): BlobPart {
+  return bytes as unknown as BlobPart;
+}
+
 function mockFile(name: string, type: string, size = 100): File {
   const bytes = new Uint8Array(size);
-  return patch(new File([bytes], name, { type }), "", bytes);
+  return patch(new File([toBlobPart(bytes)], name, { type }), "", bytes);
 }
 
 function fileWithBytes(name: string, type: string, bytes: Uint8Array): File {
-  return patch(new File([bytes], name, { type }), "", bytes);
+  return patch(new File([toBlobPart(bytes)], name, { type }), "", bytes);
 }
 
 function fileWithText(name: string, type: string, text: string): File {
@@ -172,7 +180,11 @@ describe("formatBytes", () => {
 describe("readImageAsBase64", () => {
   it("converts bytes to standard base64", async () => {
     // 'hello' in ASCII -> 'aGVsbG8='
-    const file = fileWithBytes("hello.bin", "application/octet-stream", new TextEncoder().encode("hello"));
+    const file = fileWithBytes(
+      "hello.bin",
+      "application/octet-stream",
+      new TextEncoder().encode("hello"),
+    );
     expect(await readImageAsBase64(file)).toBe("aGVsbG8=");
   });
 

@@ -8,3 +8,8 @@
 process.env.MCA_SUPERVISE_WEB = "1";
 process.env.NODE_ENV = "production";
 await import("./index.js");
+
+// Mark this file as a module so top-level `await` is permitted under
+// TypeScript's --isolatedModules / --module nodenext settings. The file
+// otherwise has no imports/exports and would be treated as a script.
+export {};
