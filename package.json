@@ -15,7 +15,11 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "clean": "npm run clean --workspaces && rm -rf node_modules"
+    "clean": "npm run clean --workspaces && rm -rf node_modules",
+    "pi": "pi",
+    "pi:list": "pi list",
+    "pi:update": "pi update",
+    "pi:install": "pi install"
   },
   "keywords": [
     "ai",

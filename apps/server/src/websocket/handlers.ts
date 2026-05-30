@@ -55,28 +55,66 @@ export function registerWebSocketHandlers(
 
     // ----- Chat -----
 
-    socket.on('chat:send', async (data: { sessionId: string; message: string }) => {
-      const { sessionId, message } = data;
-      try {
-        await piSessionManager.getOrCreateSession(sessionId);
-        attachEventForwarder(io, piSessionManager, sessionId);
-        const session = piSessionManager.getSession(sessionId)!;
-        await session.prompt(message);
-        socket.emit('chat:done', { sessionId });
-      } catch (err) {
-        socket.emit('chat:error', { sessionId, error: String(err) });
+    socket.on(
+      'chat:send',
+      async (data: {
+        sessionId: string;
+        message: string;
+        /**
+         * Optional queue behavior when the agent is already streaming.
+         * 'steer' (default): delivered after the current assistant turn finishes
+         *                    executing its tool calls, before the next LLM call.
+         * 'followUp':       delivered when the agent has no more work pending.
+         * Ignored if the agent is idle (message is sent as a fresh prompt).
+         */
+        behavior?: 'steer' | 'followUp';
+      }) => {
+        const { sessionId, message, behavior } = data;
+        console.log(
+          `[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} from=${socket.id}`
+        );
+        try {
+          await piSessionManager.getOrCreateSession(sessionId);
+          attachEventForwarder(io, piSessionManager, sessionId);
+          const session = piSessionManager.getSession(sessionId)!;
+
+          if (session.isStreaming) {
+            const mode: 'steer' | 'followUp' = behavior === 'followUp' ? 'followUp' : 'steer';
+            if (mode === 'followUp') await session.followUp(message);
+            else await session.steer(message);
+            io.emit('chat:queued', { sessionId, behavior: mode });
+            return;
+          }
+
+          await session.prompt(message);
+          // io.emit so the completion notice survives a browser reload
+          // mid-stream (a new tab still gets chat:done).
+          io.emit('chat:done', { sessionId });
+          console.log(`[WS] chat:done sid=${sessionId}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[WS] chat:send FAILED sid=${sessionId}:`, msg);
+          io.emit('chat:error', { sessionId, error: msg });
+          // Always un-stick the UI even on failure.
+          io.emit('chat:done', { sessionId });
+        }
       }
-    });
+    );
 
     socket.on('chat:abort', async (data: { sessionId: string }) => {
+      console.log(`[WS] chat:abort sid=${data.sessionId} from=${socket.id}`);
       const session = piSessionManager.getSession(data.sessionId);
       if (session) {
         try {
           await session.abort();
-          socket.emit('chat:aborted', { sessionId: data.sessionId });
+          io.emit('chat:aborted', { sessionId: data.sessionId });
+          io.emit('chat:done', { sessionId: data.sessionId });
         } catch (err) {
-          socket.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
+          io.emit('chat:error', { sessionId: data.sessionId, error: String(err) });
+          io.emit('chat:done', { sessionId: data.sessionId });
         }
+      } else {
+        io.emit('chat:done', { sessionId: data.sessionId });
       }
     });
 

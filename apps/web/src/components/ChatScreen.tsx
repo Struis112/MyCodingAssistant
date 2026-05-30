@@ -396,9 +396,13 @@ export function ChatScreen() {
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    if (!text) return;
+    // Optimistically render the user message. The server decides whether to
+    // route it as a fresh prompt or queue it as a `steer` based on whether
+    // the agent is currently streaming — either way we want the UI to feel
+    // continuous, so we never block typing or sending.
     addItem({ kind: 'user', id: generateId(), text, timestamp: Date.now() });
-    setIsStreaming(true);
+    if (!isStreaming) setIsStreaming(true);
     getSocket().emit('chat:send', { sessionId, message: text });
     setInput('');
     inputRef.current?.focus();
@@ -495,7 +499,6 @@ export function ChatScreen() {
           {sttSupported && (
             <button
               onClick={toggleListening}
-              disabled={isStreaming}
               className={cn(
                 'px-4 py-2 rounded-lg transition-colors',
                 isListening
@@ -516,11 +519,12 @@ export function ChatScreen() {
             placeholder={
               isListening
                 ? 'Listening... speak now'
-                : 'Type your message... (Enter to send, Shift+Enter for newline)'
+                : isStreaming
+                  ? 'Queue a message... (Enter to steer, Shift+Enter for newline)'
+                  : 'Type your message... (Enter to send, Shift+Enter for newline)'
             }
             className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none min-h-[44px] max-h-[200px] transition-colors"
             rows={1}
-            disabled={isStreaming}
             aria-label="Message input"
           />
           {ttsSupported && (
@@ -538,24 +542,29 @@ export function ChatScreen() {
               {autoSpeak ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
             </button>
           )}
-          {isStreaming ? (
+          {isStreaming && (
             <button
               onClick={handleAbort}
               className="px-4 py-2 bg-error/20 text-error rounded-lg hover:bg-error/30 transition-colors"
               aria-label="Stop streaming"
+              title="Stop the current response"
             >
               <Square className="w-5 h-5" />
             </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              aria-label="Send message"
-            >
-              <Send className="w-5 h-5" />
-            </button>
           )}
+          <button
+            onClick={handleSend}
+            disabled={!input.trim()}
+            className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            aria-label={isStreaming ? 'Queue message' : 'Send message'}
+            title={
+              isStreaming
+                ? 'Queue this message — delivered after the current assistant turn'
+                : 'Send message'
+            }
+          >
+            <Send className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </div>
