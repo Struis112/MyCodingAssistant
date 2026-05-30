@@ -3,13 +3,13 @@
 import { useEffect } from "react";
 import { ChatScreen } from "@/components/ChatScreen";
 import { Settings } from "@/components/Settings";
-import { SessionsView } from "@/components/SessionsView";
 import { Sidebar } from "@/components/Sidebar";
 import { useAppStore, readPersistedUserPrefs } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 
 export function AppShell() {
-  const { activeView, sessionId, currentModel, thinkingLevel, setCurrentModel, setThinkingLevel } = useAppStore();
+  const { activeView, sessionId, currentModel, thinkingLevel, setCurrentModel, setThinkingLevel } =
+    useAppStore();
 
   // Hydrate persisted prefs after mount. Doing this here — instead of in the
   // store's initial state — keeps SSR + first client render byte-identical,
@@ -84,7 +84,6 @@ export function AppShell() {
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === "chat" && <ChatScreen />}
-        {activeView === "sessions" && <SessionsView />}
         {activeView === "settings" && <Settings />}
       </main>
     </div>

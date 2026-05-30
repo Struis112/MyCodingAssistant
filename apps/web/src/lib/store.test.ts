@@ -17,7 +17,6 @@ const PRISTINE = {
   isStreaming: false,
   sessionId: "default",
   sessionFile: undefined as string | undefined,
-  persistedSessions: [] as ReturnType<typeof useAppStore.getState>["persistedSessions"],
   currentModel: null as ReturnType<typeof useAppStore.getState>["currentModel"],
   isConnected: false,
 };
@@ -37,9 +36,6 @@ describe("useAppStore", () => {
     });
 
     it("setActiveView switches", () => {
-      useAppStore.getState().setActiveView("sessions");
-      expect(useAppStore.getState().activeView).toBe("sessions");
-
       useAppStore.getState().setActiveView("settings");
       expect(useAppStore.getState().activeView).toBe("settings");
     });
