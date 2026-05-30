@@ -9,10 +9,6 @@ import {
   Square,
   Trash2,
   Terminal,
-  Mic,
-  MicOff,
-  Volume2,
-  VolumeX,
   Wrench,
   Check,
   X,
@@ -20,8 +16,6 @@ import {
   Brain,
   Plus,
 } from 'lucide-react';
-import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
-import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 
 // ----- helpers to translate persisted AgentMessage[] into ChatItem[] -----
 
@@ -123,63 +117,14 @@ export function ChatScreen() {
   } = useAppStore();
 
   const [input, setInput] = useState('');
-  const [autoSpeak, setAutoSpeak] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const currentAssistantIdRef = useRef<string | null>(null);
-  const lastSpokenAssistantIdRef = useRef<string | null>(null);
-
-  // Voice hooks (SSR-safe — both flags start false)
-  const {
-    isListening,
-    transcript,
-    interimTranscript,
-    startListening,
-    stopListening,
-    resetTranscript,
-    isSupported: sttSupported,
-  } = useSpeechRecognition({ language: 'en-US', continuous: false });
-
-  const {
-    speak,
-    cancel: cancelSpeech,
-    isSpeaking,
-    isSupported: ttsSupported,
-  } = useSpeechSynthesis({ rate: 1, pitch: 1 });
 
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
-
-  // Feed voice transcript into the input box
-  useEffect(() => {
-    if (transcript) {
-      setInput((prev) => (prev ? prev + ' ' : '') + transcript);
-      resetTranscript();
-    }
-  }, [transcript, resetTranscript]);
-
-  // Auto-speak assistant text when enabled
-  useEffect(() => {
-    if (!autoSpeak || isStreaming || !ttsSupported) return;
-    const last = items[items.length - 1];
-    if (
-      last &&
-      last.kind === 'assistant' &&
-      !last.isStreaming &&
-      last.id !== lastSpokenAssistantIdRef.current
-    ) {
-      const text = last.blocks
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text)
-        .join('\n');
-      if (text.trim()) {
-        lastSpokenAssistantIdRef.current = last.id;
-        speak(text);
-      }
-    }
-  }, [items, autoSpeak, isStreaming, ttsSupported, speak]);
 
   // ----- SDK event handler -----
 
@@ -424,12 +369,6 @@ export function ChatScreen() {
     }
   };
 
-  const toggleListening = () => (isListening ? stopListening() : startListening());
-  const toggleAutoSpeak = () => {
-    if (autoSpeak) cancelSpeech();
-    setAutoSpeak(!autoSpeak);
-  };
-
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
@@ -442,12 +381,6 @@ export function ChatScreen() {
           </span>
         )}
         <div className="flex-1" />
-        {isListening && (
-          <span className="text-xs text-error animate-pulse">● Listening...</span>
-        )}
-        {isSpeaking && (
-          <span className="text-xs text-primary animate-pulse">● Speaking...</span>
-        )}
         {isStreaming && (
           <span className="text-xs text-warning animate-pulse">● Streaming...</span>
         )}
@@ -496,52 +429,20 @@ export function ChatScreen() {
       {/* Input */}
       <div className="border-t border-border p-4 shrink-0">
         <div className="flex gap-2">
-          {sttSupported && (
-            <button
-              onClick={toggleListening}
-              className={cn(
-                'px-4 py-2 rounded-lg transition-colors',
-                isListening
-                  ? 'bg-error/20 text-error hover:bg-error/30'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-              )}
-              aria-label={isListening ? 'Stop listening' : 'Start voice input'}
-              title={isListening ? 'Stop listening' : 'Voice input'}
-            >
-              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </button>
-          )}
           <textarea
             ref={inputRef}
-            value={input + (interimTranscript ? ' ' + interimTranscript : '')}
+            value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              isListening
-                ? 'Listening... speak now'
-                : isStreaming
-                  ? 'Queue a message... (Enter to steer, Shift+Enter for newline)'
-                  : 'Type your message... (Enter to send, Shift+Enter for newline)'
+              isStreaming
+                ? 'Queue a message... (Enter to steer, Shift+Enter for newline)'
+                : 'Type your message... (Enter to send, Shift+Enter for newline)'
             }
             className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none min-h-[44px] max-h-[200px] transition-colors"
             rows={1}
             aria-label="Message input"
           />
-          {ttsSupported && (
-            <button
-              onClick={toggleAutoSpeak}
-              className={cn(
-                'px-4 py-2 rounded-lg transition-colors',
-                autoSpeak
-                  ? 'bg-primary/20 text-primary hover:bg-primary/30'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-              )}
-              aria-label={autoSpeak ? 'Disable auto-speak' : 'Enable auto-speak'}
-              title={autoSpeak ? 'Auto-speak enabled' : 'Auto-speak disabled'}
-            >
-              {autoSpeak ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-            </button>
-          )}
           {isStreaming && (
             <button
               onClick={handleAbort}
