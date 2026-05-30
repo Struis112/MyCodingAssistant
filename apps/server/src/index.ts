@@ -13,10 +13,14 @@ import { registerWebSocketHandlers } from "./websocket/handlers.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const HOST = process.env.HOST || "0.0.0.0";
+// Allow the frontend origin to be overridden via env so devs running the web
+// app on a non-default port (e.g. when 3000 is already taken) don't get
+// CORS errors. Defaults preserve the original behaviour.
+const WEB_ORIGIN = process.env.MCA_WEB_ORIGIN || "http://localhost:3000";
 
 // Express app
 const app = express();
-app.use(cors({ origin: "http://localhost:3000" }));
+app.use(cors({ origin: WEB_ORIGIN }));
 app.use(express.json());
 
 // HTTP server
@@ -25,7 +29,7 @@ const httpServer = createServer(app);
 // WebSocket server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: WEB_ORIGIN,
     methods: ["GET", "POST"],
   },
 });
@@ -39,7 +43,8 @@ const piSessionManager = new PiSessionManager();
 const webPort = parseInt(process.env.WEB_PORT || "3000", 10);
 const webDir = process.env.MCA_WEB_DIR || path.resolve(process.cwd(), "..", "web");
 
-const webSupervisor = process.env.MCA_SUPERVISE_WEB === "1" ? new WebSupervisor({ webDir, port: webPort }) : null;
+const webSupervisor =
+  process.env.MCA_SUPERVISE_WEB === "1" ? new WebSupervisor({ webDir, port: webPort }) : null;
 
 // Health check
 app.get("/health", (_req, res) => {
@@ -59,7 +64,8 @@ app.get("/api/web/status", (_req, res) => {
 app.post("/api/web/restart", async (_req, res) => {
   if (!webSupervisor) {
     res.status(400).json({
-      error: "Web supervisor is not running. Start the server with MCA_SUPERVISE_WEB=1 (or `npm run start`).",
+      error:
+        "Web supervisor is not running. Start the server with MCA_SUPERVISE_WEB=1 (or `npm run start`).",
     });
     return;
   }
