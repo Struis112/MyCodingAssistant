@@ -17,6 +17,7 @@ const PRISTINE = {
   isStreaming: false,
   sessionId: "default",
   sessionFile: undefined as string | undefined,
+  persistedSessions: [] as ReturnType<typeof useAppStore.getState>["persistedSessions"],
   currentModel: null as ReturnType<typeof useAppStore.getState>["currentModel"],
   isConnected: false,
 };
@@ -38,6 +39,22 @@ describe("useAppStore", () => {
     it("setActiveView switches", () => {
       useAppStore.getState().setActiveView("settings");
       expect(useAppStore.getState().activeView).toBe("settings");
+      useAppStore.getState().setActiveView("sessions");
+      expect(useAppStore.getState().activeView).toBe("sessions");
+    });
+  });
+
+  describe("persisted sessions", () => {
+    it("starts empty", () => {
+      expect(useAppStore.getState().persistedSessions).toEqual([]);
+    });
+
+    it("setPersistedSessions replaces the list", () => {
+      useAppStore.getState().setPersistedSessions([
+        { id: "a", path: "/tmp/a.json", name: "A", modifiedAt: 1 },
+        { id: "b", path: "/tmp/b.json", name: "B", modifiedAt: 2 },
+      ]);
+      expect(useAppStore.getState().persistedSessions).toHaveLength(2);
     });
   });
 

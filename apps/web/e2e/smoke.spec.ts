@@ -4,8 +4,9 @@ test.describe("smoke", () => {
   test("root URL renders the chat shell", async ({ page }) => {
     await page.goto("/");
 
-    // Two sidebar nav buttons (Chat + Settings).
+    // Three sidebar nav buttons (Chat + Sessions + Settings).
     await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sessions", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
 
     // Chat input + send button

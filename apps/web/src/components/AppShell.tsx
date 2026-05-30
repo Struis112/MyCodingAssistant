@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { ChatScreen } from "@/components/ChatScreen";
+import { SessionsView } from "@/components/SessionsView";
 import { Settings } from "@/components/Settings";
 import { Sidebar } from "@/components/Sidebar";
 import { useAppStore, readPersistedUserPrefs } from "@/lib/store";
@@ -84,6 +85,7 @@ export function AppShell() {
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === "chat" && <ChatScreen />}
+        {activeView === "sessions" && <SessionsView />}
         {activeView === "settings" && <Settings />}
       </main>
     </div>

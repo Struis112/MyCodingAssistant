@@ -57,7 +57,7 @@ export function readPersistedUserPrefs(): {
   };
 }
 
-export type View = "chat" | "settings";
+export type View = "chat" | "sessions" | "settings";
 
 // ----- Chat items -----
 //
@@ -102,6 +102,14 @@ export interface ModelInfo {
   reasoning?: boolean;
 }
 
+export interface PersistedSession {
+  id: string;
+  path: string;
+  name: string;
+  modifiedAt: number;
+  messageCount?: number;
+}
+
 interface AppState {
   // View
   activeView: View;
@@ -124,6 +132,10 @@ interface AppState {
   setSessionId: (id: string) => void;
   sessionFile: string | undefined;
   setSessionFile: (path: string | undefined) => void;
+
+  // Persisted session list (server returns these on `chat:list`).
+  persistedSessions: PersistedSession[];
+  setPersistedSessions: (sessions: PersistedSession[]) => void;
 
   // Model
   currentModel: ModelInfo | null;
@@ -161,6 +173,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSessionId: (id) => set({ sessionId: id }),
   sessionFile: undefined,
   setSessionFile: (path) => set({ sessionFile: path }),
+
+  persistedSessions: [],
+  setPersistedSessions: (sessions) => set({ persistedSessions: sessions }),
 
   // SSR-safe defaults. localStorage is read in AppShell's mount effect via
   // hydrateUserPrefs() so the server snapshot and the client's first render

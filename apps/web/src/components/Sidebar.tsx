@@ -4,10 +4,13 @@ import { useEffect } from "react";
 import { useAppStore } from "@/lib/store";
 import { connectSocket } from "@/lib/socket";
 import { cn } from "@/lib/utils";
-import { MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { FolderOpen, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 
 // Top of the menu bar.
-const navItems = [{ id: "chat", icon: MessageSquare, label: "Chat" }] as const;
+const navItems = [
+  { id: "chat", icon: MessageSquare, label: "Chat" },
+  { id: "sessions", icon: FolderOpen, label: "Sessions" },
+] as const;
 
 // Pinned to the bottom of the menu bar.
 const bottomNavItems = [{ id: "settings", icon: SettingsIcon, label: "Settings" }] as const;
