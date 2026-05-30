@@ -29,10 +29,13 @@ export function useSpeechSynthesis(
   const [isPaused, setIsPaused] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
-  const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  // Defer to after mount so SSR and first client render match.
+  const [isSupported, setIsSupported] = useState(false);
 
   useEffect(() => {
-    if (!isSupported) return;
+    const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+    setIsSupported(supported);
+    if (!supported) return;
 
     const loadVoices = () => {
       const availableVoices = window.speechSynthesis.getVoices();
@@ -49,7 +52,7 @@ export function useSpeechSynthesis(
     return () => {
       window.speechSynthesis.cancel();
     };
-  }, [isSupported]);
+  }, []);
 
   const speak = useCallback(
     (text: string) => {

@@ -29,7 +29,11 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
   const [isActive, setIsActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isSupported = typeof navigator !== 'undefined' && 'mediaDevices' in navigator;
+  // Defer to after mount so SSR and first client render match.
+  const [isSupported, setIsSupported] = useState(false);
+  useEffect(() => {
+    setIsSupported(typeof navigator !== 'undefined' && 'mediaDevices' in navigator);
+  }, []);
 
   const startCamera = useCallback(async () => {
     if (!isSupported) {

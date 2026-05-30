@@ -30,11 +30,16 @@ export function useSpeechRecognition(
   const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<any>(null);
-  const isSupported = typeof window !== 'undefined' && 
-    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  // Start as false so SSR + first client render match, then flip on after
+  // mount once we can safely check the browser globals.
+  const [isSupported, setIsSupported] = useState(false);
 
   useEffect(() => {
-    if (!isSupported) {
+    const supported =
+      typeof window !== 'undefined' &&
+      ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+    setIsSupported(supported);
+    if (!supported) {
       setError('Speech recognition not supported in this browser');
       return;
     }
@@ -86,7 +91,7 @@ export function useSpeechRecognition(
         recognitionRef.current.stop();
       }
     };
-  }, [language, continuous, interimResults, isSupported]);
+  }, [language, continuous, interimResults]);
 
   const startListening = useCallback(() => {
     if (recognitionRef.current && !isListening) {
