@@ -55,8 +55,8 @@ apps/
       SessionsView       persisted session list, click to resume
       Settings           model picker, thinking level, theme toggle
       Sidebar            three-item nav (chat / sessions / settings)
-    src/hooks/           useSpeechRecognition, useSpeechSynthesis
-    src/lib/             store (Zustand), socket, theme, utils
+    src/hooks/           useModels (SWR-cached /api/models)
+    src/lib/             store (Zustand), socket, theme, swr-provider, files, utils
 packages/
   shared/                shared TS types
 ```
