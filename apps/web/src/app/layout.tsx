@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { ThemeProvider } from "@/lib/theme";
+import { cookies } from "next/headers";
+import { ThemeProvider, THEME_COOKIE, type Theme } from "@/lib/theme";
 import { SWRProvider } from "@/lib/swr-provider";
 import "@/styles/globals.css";
 
@@ -8,32 +9,18 @@ export const metadata: Metadata = {
   description: "Self-learning AI coding assistant",
 };
 
-// Inline script: runs synchronously before React hydrates, sets the theme
-// class on <html> based on localStorage or OS preference. This prevents both
-// a flash of the wrong theme and the hydration mismatch warning.
-const themeInitScript = `
-(function () {
-  try {
-    var stored = localStorage.getItem('mca-theme');
-    var theme = stored === 'light' || stored === 'dark'
-      ? stored
-      : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    document.documentElement.classList.remove('light', 'dark');
-    document.documentElement.classList.add(theme);
-  } catch (e) {
-    document.documentElement.classList.add('dark');
-  }
-})();
-`;
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Resolve the theme on the server from a cookie. When present, we render the
+  // matching class on <html> directly, so the markup is fully deterministic —
+  // no pre-hydration script and no flash. When absent (first visit), we render
+  // no class and let CSS `prefers-color-scheme` pick the colors (see globals.css).
+  const stored = (await cookies()).get(THEME_COOKIE)?.value;
+  const theme: Theme | undefined = stored === "light" || stored === "dark" ? stored : undefined;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-      </head>
-      <body className="antialiased" suppressHydrationWarning>
-        <ThemeProvider>
+    <html lang="en" className={theme} suppressHydrationWarning>
+      <body className="antialiased">
+        <ThemeProvider initialTheme={theme}>
           <SWRProvider>{children}</SWRProvider>
         </ThemeProvider>
       </body>

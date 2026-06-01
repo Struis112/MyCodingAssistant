@@ -2,7 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-type Theme = "light" | "dark";
+export type Theme = "light" | "dark";
+
+/** Cookie the server reads in layout.tsx to render the theme class on <html>. */
+export const THEME_COOKIE = "mca-theme";
 
 interface ThemeContextType {
   theme: Theme;
@@ -12,45 +15,67 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-// Read the theme that the pre-hydration inline script (in layout.tsx) wrote
-// onto <html>. Falling back to 'dark' if anything is off.
-function getInitialTheme(): Theme {
-  if (typeof document === "undefined") return "dark";
-  return document.documentElement.classList.contains("light") ? "light" : "dark";
+function readThemeCookie(): Theme | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${THEME_COOKIE}=([^;]*)`));
+  const value = match ? decodeURIComponent(match[1]) : null;
+  return value === "light" || value === "dark" ? value : null;
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Initialize from the class the pre-hydration script set. This matches
-  // what React rendered on the server (which has no class), but since we
-  // use suppressHydrationWarning on <html> the mismatch is safe.
-  const [theme, setThemeState] = useState<Theme>(getInitialTheme);
+function systemTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
-  // Keep theme in sync with OS preference when the user hasn't explicitly chosen.
+export function ThemeProvider({
+  children,
+  initialTheme,
+}: {
+  children: React.ReactNode;
+  /** Theme resolved on the server from the cookie; undefined on first visit. */
+  initialTheme?: Theme;
+}) {
+  // `explicit` = the user has made a choice (a cookie exists). When false, the
+  // OS preference drives the colors via CSS `prefers-color-scheme`, and we must
+  // NOT stamp a class onto <html> (doing so would override that media query).
+  const explicit = initialTheme !== undefined;
+
+  // Deterministic initial state for server + client first render (no mismatch).
+  // For the no-cookie case we correct to the OS preference in an effect below.
+  const [theme, setThemeState] = useState<Theme>(initialTheme ?? "dark");
+  const [isExplicit, setIsExplicit] = useState<boolean>(explicit);
+
+  // First-visit correction + keep in sync with OS preference until the user chooses.
   useEffect(() => {
+    if (!readThemeCookie()) {
+      setIsExplicit(false);
+      setThemeState(systemTheme());
+    }
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (e: MediaQueryListEvent) => {
-      const stored = localStorage.getItem("mca-theme");
-      if (!stored) {
-        setThemeState(e.matches ? "dark" : "light");
-      }
+      if (!readThemeCookie()) setThemeState(e.matches ? "dark" : "light");
     };
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
   }, []);
 
-  // Apply theme to <html> when it changes.
+  // Stamp the class on <html> only for an explicit choice. Otherwise leave the
+  // element class-free so CSS `prefers-color-scheme` controls the colors.
   useEffect(() => {
-    document.documentElement.classList.remove("light", "dark");
-    document.documentElement.classList.add(theme);
-  }, [theme]);
+    const root = document.documentElement;
+    if (!isExplicit) {
+      root.classList.remove("light", "dark");
+      return;
+    }
+    root.classList.remove("light", "dark");
+    root.classList.add(theme);
+  }, [theme, isExplicit]);
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
-    try {
-      localStorage.setItem("mca-theme", newTheme);
-    } catch {
-      /* private mode / quota — ignore */
-    }
+    setIsExplicit(true);
+    // 1 year, lax — readable by the server on the next request.
+    document.cookie = `${THEME_COOKIE}=${newTheme}; path=/; max-age=31536000; SameSite=Lax`;
   }, []);
 
   const toggleTheme = useCallback(() => {
