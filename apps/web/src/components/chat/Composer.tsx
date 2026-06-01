@@ -112,33 +112,55 @@ export function Composer() {
 
   // ----- Send / abort -----
 
+  // Core send: render an optimistic user item and emit over the socket.
+  // Shared by the normal send button, the Enter key, and the right-click
+  // "Continue" shortcut. Does not touch the textarea draft or pending files —
+  // callers decide whether to clear them.
+  const sendMessage = useCallback(
+    (text: string, files: PendingFile[] = []) => {
+      const trimmed = text.trim();
+      if (!trimmed && files.length === 0) return;
+
+      const messageToSend = composeMessageWithAttachments(trimmed, files);
+      const images = toSdkImages(files);
+
+      // Optimistically render the user message. Show a short summary of any
+      // attachments so the user can see what was sent.
+      const attachmentSummary = files.length
+        ? files.map((f) => `· ${f.name} (${formatBytes(f.size)})`).join("\n")
+        : "";
+      const displayText = attachmentSummary
+        ? `${trimmed}${trimmed ? "\n\n" : ""}📎 ${files.length} attachment${files.length > 1 ? "s" : ""}:\n${attachmentSummary}`
+        : trimmed;
+
+      addItem({ kind: "user", id: generateId(), text: displayText, timestamp: Date.now() });
+      if (!isStreaming) setIsStreaming(true);
+      getSocket().emit("chat:send", {
+        sessionId,
+        message: messageToSend,
+        images: images.length > 0 ? images : undefined,
+      });
+    },
+    [isStreaming, sessionId, addItem, setIsStreaming],
+  );
+
   const handleSend = useCallback(() => {
-    const trimmed = input.trim();
-    if (!trimmed && pendingFiles.length === 0) return;
-
-    const messageToSend = composeMessageWithAttachments(trimmed, pendingFiles);
-    const images = toSdkImages(pendingFiles);
-
-    // Optimistically render the user message. Show a short summary of any
-    // attachments so the user can see what was sent.
-    const attachmentSummary = pendingFiles.length
-      ? pendingFiles.map((f) => `· ${f.name} (${formatBytes(f.size)})`).join("\n")
-      : "";
-    const displayText = attachmentSummary
-      ? `${trimmed}${trimmed ? "\n\n" : ""}📎 ${pendingFiles.length} attachment${pendingFiles.length > 1 ? "s" : ""}:\n${attachmentSummary}`
-      : trimmed;
-
-    addItem({ kind: "user", id: generateId(), text: displayText, timestamp: Date.now() });
-    if (!isStreaming) setIsStreaming(true);
-    getSocket().emit("chat:send", {
-      sessionId,
-      message: messageToSend,
-      images: images.length > 0 ? images : undefined,
-    });
+    if (!input.trim() && pendingFiles.length === 0) return;
+    sendMessage(input, pendingFiles);
     setInput("");
     setPendingFiles([]);
     inputRef.current?.focus();
-  }, [input, pendingFiles, isStreaming, sessionId, addItem, setIsStreaming]);
+  }, [input, pendingFiles, sendMessage]);
+
+  // Right-click the send/queue button to instantly send "Continue" without
+  // clobbering whatever is currently in the textarea.
+  const handleQuickContinue = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault(); // suppress the browser context menu
+      sendMessage("Continue");
+    },
+    [sendMessage],
+  );
 
   const handleAbort = useCallback(() => {
     getSocket().emit("chat:abort", { sessionId });
@@ -225,13 +247,24 @@ export function Composer() {
         )}
         <button
           onClick={handleSend}
-          disabled={!input.trim() && pendingFiles.length === 0}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          onContextMenu={handleQuickContinue}
+          // Use aria-disabled rather than the native `disabled` attribute: a
+          // disabled button swallows every mouse event (including
+          // contextmenu), which would break the right-click “Continue”
+          // shortcut when the textarea is empty. handleSend itself no-ops on an
+          // empty draft, so left-click stays safe.
+          aria-disabled={!input.trim() && pendingFiles.length === 0}
+          className={cn(
+            "px-4 py-2 bg-primary text-primary-foreground rounded-lg transition-colors",
+            !input.trim() && pendingFiles.length === 0
+              ? "opacity-50 cursor-not-allowed"
+              : "hover:bg-primary/90",
+          )}
           aria-label={isStreaming ? "Queue message" : "Send message"}
           title={
             isStreaming
-              ? "Queue this message — delivered after the current assistant turn"
-              : "Send message"
+              ? "Queue this message — delivered after the current assistant turn (right-click to send “Continue”)"
+              : "Send message (right-click to send “Continue”)"
           }
         >
           <Send className="w-5 h-5" />
