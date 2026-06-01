@@ -1,0 +1,139 @@
+# Weekly + on-lockfile-change security audit.
+#
+# Two-tier policy:
+#   - PRODUCTION deps, high/critical    -> fails the job (real risk)
+#   - All deps, all severities          -> informational (Step Summary)
+#
+# Dev-only advisories (vitest, vite, esbuild, jsdom, etc.) don't reach the
+# shipping bundle, so they're surfaced but don't block. Anyone reading the
+# audit run can still see them in the summary.
+#
+# Triggers:
+#   - Monday 06:00 UTC (cron) so we get fresh advisories at the start of
+#     the work week.
+#   - Any push that touches lockfile / package.json — keeps Dependabot PRs
+#     honest (the audit job runs on each one).
+#   - Manually via the Actions tab (workflow_dispatch).
+
+name: Security audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "apps/*/package.json"
+      - "packages/*/package.json"
+  pull_request:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "apps/*/package.json"
+      - "packages/*/package.json"
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit (prod high/critical fails, full report informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` is strict: it errors if the lockfile is out of sync with
+      # the manifests. That doubles as a lockfile-drift check for free.
+      - name: Install (locked)
+        run: npm ci
+
+      # ----- prod-only, high+critical: this one can fail the job -----
+      - name: Audit production deps (high+critical)
+        id: prod-audit
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > prod.json
+          status=$?
+          set -e
+          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+          # Always render a readable summary too.
+          npm audit --omit=dev --audit-level=high > prod.txt 2>&1 || true
+          cat prod.txt
+          {
+            echo "## Production deps — high / critical"
+            echo
+            if [ "${status}" -eq 0 ]; then
+              echo "✅ No high or critical advisories in production deps."
+            else
+              echo "❌ Findings — see below."
+            fi
+            echo
+            echo '```'
+            cat prod.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ----- full audit: every severity, informational only -----
+      - name: Audit full tree (all severities)
+        if: always()
+        run: |
+          set +e
+          npm audit > full.txt 2>&1
+          set -e
+          cat full.txt
+          {
+            echo ""
+            echo "## Full audit (all severities, including dev deps)"
+            echo
+            echo '```'
+            cat full.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ----- outdated check: see what's safe to bump -----
+      # `npm outdated` exits non-zero when packages are out of date. We
+      # tolerate that — it's signal, not failure.
+      - name: List outdated packages (informational)
+        if: always()
+        run: |
+          set +e
+          npm outdated > outdated.txt 2>&1
+          set -e
+          cat outdated.txt || true
+          {
+            echo ""
+            echo "## Outdated packages (\`npm outdated\`)"
+            echo
+            echo '```'
+            cat outdated.txt
+            echo '```'
+            echo ""
+            echo "Minor/patch updates land automatically via Dependabot's"
+            echo "weekly grouped PRs. Major updates open as individual PRs."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ----- the gate -----
+      - name: Fail if production deps have high/critical advisories
+        if: steps.prod-audit.outputs.exit_code != '0'
+        run: |
+          echo "::error::npm audit found high/critical advisories in production deps."
+          echo "::error::See the workflow Step Summary for details, then either"
+          echo "::error::upgrade the offending package, drop it, or add a documented"
+          echo "::error::override in root package.json's \"overrides\" block."
+          exit 1

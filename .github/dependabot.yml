@@ -1,0 +1,66 @@
+# Dependabot configuration.
+#
+# Two ecosystems on a single weekly cadence (Monday 06:00 UTC, so PRs land
+# before the work week and CI capacity is light). Updates are grouped to
+# avoid PR spam: all production minor/patch changes go in one PR, all dev
+# minor/patch changes in another, and CI Actions in a third.
+#
+# Major updates are intentionally *not* grouped — Dependabot will open a
+# separate PR per major bump so each gets individual review. We don't auto-
+# merge anything; CI must pass (the audit workflow runs on every lockfile
+# change, see audit.yml).
+
+version: 2
+updates:
+  # ----- npm (root + apps/* + packages/* via workspaces) -----
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      production-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      development-minor-patch:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+    # Ignore the Pi SDK's `latest` tag — we deliberately track it floating.
+    # Dependabot still surfaces critical security advisories regardless.
+    ignore:
+      - dependency-name: "@earendil-works/pi-coding-agent"
+        versions: ["*"]
+
+  # ----- GitHub Actions used by .github/workflows/*.yml -----
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "ci"
+      - "github-actions"
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      ci-actions:
+        patterns:
+          - "*"

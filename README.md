@@ -9,13 +9,13 @@ blocks, and tool executions all render live in the chat. Sessions persist to
 
 ## Tech
 
-| Layer | Choice |
-|---|---|
-| Frontend | Next.js 15 (App Router), React 19, Tailwind CSS |
-| Backend | Node.js 22+, Express, Socket.IO |
-| AI core | `@earendil-works/pi-coding-agent` (in-process SDK) |
-| State | Zustand |
-| Workspace | npm workspaces |
+| Layer     | Choice                                             |
+| --------- | -------------------------------------------------- |
+| Frontend  | Next.js 15 (App Router), React 19, Tailwind CSS    |
+| Backend   | Node.js 22+, Express, Socket.IO                    |
+| AI core   | `@earendil-works/pi-coding-agent` (in-process SDK) |
+| State     | Zustand                                            |
+| Workspace | npm workspaces                                     |
 
 ## Run it
 
@@ -69,6 +69,35 @@ apps/
     src/lib/             store (Zustand), socket, theme, swr-provider, files, utils
 packages/
   shared/                shared TS types
+```
+
+## Dependency hygiene
+
+The repo runs two automations on top of the regular CI pipeline (in
+`.github/workflows/ci.yml`):
+
+- **`.github/dependabot.yml`** — Monday 06:00 UTC. Opens grouped PRs for
+  minor + patch bumps (one PR for production deps, one for dev deps, one
+  for GitHub Actions). Major bumps come as individual PRs. The Pi SDK
+  itself is pinned to `latest` and intentionally ignored.
+- **`.github/workflows/audit.yml`** — Monday 06:00 UTC, and also on every
+  push or PR that touches a `package.json` / `package-lock.json`. Two-tier
+  policy:
+  - Production deps with high/critical advisories → **fails the run**.
+  - Full tree (every severity, including dev deps) → informational only,
+    rendered to the GitHub step summary alongside `npm outdated`.
+
+The lockfile is the source of truth (`npm ci` is what CI uses; it fails on
+any drift). If you need to force a transitive dep version because it can't
+be reached through normal upgrades, add it to the root `package.json`
+`overrides` block.
+
+Run the same checks locally:
+
+```bash
+npm audit                            # full tree
+npm audit --omit=dev --audit-level=high   # the gate that CI enforces
+npm outdated                         # what's behind
 ```
 
 ## Theme
