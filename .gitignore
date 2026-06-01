@@ -64,3 +64,6 @@ test-results/
 # Pi sessions
 .pi/
 message-preview.html
+
+# Per-machine setup marker (written by scripts/setup.mjs)
+.mca-setup-done

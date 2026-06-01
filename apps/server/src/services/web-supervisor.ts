@@ -12,8 +12,30 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { createConnection } from "node:net";
+
+/**
+ * Locate the `next` binary the supervisor should spawn.
+ *
+ * npm workspaces hoists shared deps to the repo-root `node_modules/`, so the
+ * binary is usually at `<repoRoot>/node_modules/next/dist/bin/next`, not
+ * `<webDir>/node_modules/next/...`. We try Node's own resolution first
+ * (which walks up the directory tree just like a normal require would),
+ * then fall back to the per-package path for non-workspace installs.
+ */
+function findNextBinary(webDir: string): string | null {
+  try {
+    const requireFromWeb = createRequire(path.join(webDir, "package.json"));
+    const resolved = requireFromWeb.resolve("next/dist/bin/next");
+    if (existsSync(resolved)) return resolved;
+  } catch {
+    /* fall through to legacy path */
+  }
+  const legacy = path.join(webDir, "node_modules", "next", "dist", "bin", "next");
+  return existsSync(legacy) ? legacy : null;
+}
 
 export type WebStatus =
   | { state: "disabled" }
@@ -124,13 +146,13 @@ export class WebSupervisor extends EventEmitter {
 
   private spawnNow(): void {
     const { webDir, port } = this.opts;
-    const nextBin = path.join(webDir, "node_modules", "next", "dist", "bin", "next");
+    const nextBin = findNextBinary(webDir);
 
-    if (!existsSync(nextBin)) {
+    if (!nextBin) {
       this.shouldRun = false;
       this.setStatus({
         state: "failed",
-        reason: `Cannot find Next.js binary at ${nextBin}. Run \`npm run build\` first.`,
+        reason: `Cannot find Next.js binary near ${webDir}. Run \`npm install\` and \`npm run build\` from the repo root first.`,
         restarts: this.restarts,
       });
       return;

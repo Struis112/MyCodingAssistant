@@ -2,10 +2,10 @@
 git clone https://github.com/Struis112/MyCodingAssistant.git
 cd MyCodingAssistant
 npm install                # installs husky pre-commit hooks too
-npm run dev                # starts server (:3001) + web (:3000)
+npm run dev                # starts server (:7641) + web (:7642)
 ```
 
-Open <http://localhost:3000/>.
+Open <http://localhost:7642/>.
 
 ## Tooling
 
@@ -79,7 +79,7 @@ Container Registry at `ghcr.io/struis112/mycodingassistant`. Pull and run:
 
 ```sh
 docker run --rm -it \
-  -p 3000:3000 -p 3001:3001 \
+  -p 7642:7642 -p 7641:7641 \
   -v ~/.pi/agent:/data/pi \
   ghcr.io/struis112/mycodingassistant:latest
 ```

@@ -21,12 +21,22 @@ blocks, and tool executions all render live in the chat. Sessions persist to
 
 ```bash
 npm install
-npm run dev          # starts server (:3001) and web (:3000)
+npm run dev          # starts server (:7641) and web (:7642)
 ```
 
-Open <http://localhost:3000/>. Make sure you have an API key configured
+Open <http://localhost:7642/>. Make sure you have an API key configured
 either via `~/.pi/agent/auth.json` (run `pi /login`) or an env var like
 `ANTHROPIC_API_KEY`.
+
+### First-time setup (optional)
+
+```bash
+npm run setup       # one-time interactive setup
+```
+
+On Windows, the setup wizard offers to install MCA as a Windows Service so
+the server + web auto-start on boot and stay up across restarts (requires an
+elevated PowerShell — the wizard tells you how).
 
 ## Scripts
 

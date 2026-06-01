@@ -8,18 +8,30 @@ import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ConnectorRegistry } from "./connectors/registry.js";
 import { createPiConnector } from "./connectors/pi/index.js";
 import { WebSupervisor, type WebStatus } from "./services/web-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 
-const PORT = parseInt(process.env.PORT || "3001", 10);
+// Resolve paths relative to the entry script, not the cwd. The previous
+// `process.cwd()`-based default for MCA_WEB_DIR broke when starting the
+// service from a different directory (e.g. C:\Windows\System32 when a
+// Windows Service launches us): it produced `<cwd>/../web`, which is
+// nonsense unless cwd happens to be apps/server.
+//
+// `import.meta.url` points at this file:
+//   dev:  apps/server/src/index.ts        → ../../web = apps/web
+//   prod: apps/server/dist/index.js       → ../../web = apps/web
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+const PORT = parseInt(process.env.PORT || "7641", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 // Allow the frontend origin to be overridden via env so devs running the web
-// app on a non-default port (e.g. when 3000 is already taken) don't get
-// CORS errors. Defaults preserve the original behaviour.
-const WEB_ORIGIN = process.env.MCA_WEB_ORIGIN || "http://localhost:3000";
+// app on a non-default port (e.g. when 7642 is already taken) don't get
+// CORS errors. Default mirrors the web `next dev -p 7642`.
+const WEB_ORIGIN = process.env.MCA_WEB_ORIGIN || "http://localhost:7642";
 
 // Express app
 const app = express();
@@ -47,8 +59,8 @@ const piSessionManager = connectors.getDefaultManager();
 // Optional: keep the Next.js web server alive across crashes / updates.
 // Off by default so `npm run dev:server` doesn't fight `npm run dev:web`.
 // `start-prod.ts` flips MCA_SUPERVISE_WEB=1 for `npm run start`.
-const webPort = parseInt(process.env.WEB_PORT || "3000", 10);
-const webDir = process.env.MCA_WEB_DIR || path.resolve(process.cwd(), "..", "web");
+const webPort = parseInt(process.env.WEB_PORT || "7642", 10);
+const webDir = process.env.MCA_WEB_DIR || path.resolve(HERE, "..", "..", "web");
 
 const webSupervisor =
   process.env.MCA_SUPERVISE_WEB === "1" ? new WebSupervisor({ webDir, port: webPort }) : null;

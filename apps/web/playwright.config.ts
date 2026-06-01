@@ -3,8 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * Playwright config — runs against a production build of the app.
  *
- * Spins up both the API server (port 3001) and the Next.js production
- * server (port 3000) before tests, and waits for both to be reachable.
+ * Spins up both the API server (port 7641) and the Next.js production
+ * server (port 7642) before tests, and waits for both to be reachable.
  */
 export default defineConfig({
   testDir: "./e2e",
@@ -14,7 +14,7 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: "http://localhost:7642",
     trace: "on-first-retry",
     video: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -28,13 +28,14 @@ export default defineConfig({
   webServer: [
     {
       command: "node ../server/dist/index.js",
-      url: "http://localhost:3001/health",
+      url: "http://localhost:7641/health",
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
     },
     {
       command: "npm run start",
-      url: "http://localhost:3000",
+      url: "http://localhost:7642",
+      env: { PORT: "7642" },
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },

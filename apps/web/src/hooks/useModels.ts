@@ -10,7 +10,7 @@ export interface Model {
   reasoning?: boolean;
 }
 
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001";
+const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:7641";
 
 /**
  * Fetch the list of available models with SWR caching. The cache is
