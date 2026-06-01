@@ -1,4 +1,4 @@
-# MyCodingAssistant — Windows Service installer
+# MyCodingAssistant -- Windows Service installer
 #
 # Registers a Windows Service named "MyCodingAssistant" that runs
 #   node apps/server/dist/start-prod.js
@@ -30,7 +30,7 @@ $WebPort        = if ($env:MCA_WEB_PORT)        { $env:MCA_WEB_PORT }        els
 # ---- Admin check ----
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "This script must be run from an elevated PowerShell. Right-click PowerShell → Run as administrator, cd to this repo, then re-run."
+    Write-Error "This script must be run from an elevated PowerShell. Right-click PowerShell -> Run as administrator, cd to this repo, then re-run."
     exit 1
 }
 
@@ -106,16 +106,16 @@ $envValues = @(
 $svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
 New-ItemProperty -Path $svcKey -Name "Environment" -Value $envValues -PropertyType MultiString -Force | Out-Null
 
-# sc.exe doesn't expose a `cwd` field — the service starts in
+# sc.exe doesn't expose a `cwd` field -- the service starts in
 # C:\Windows\System32 by default. Override via the registry too.
 # Note: this only works because our entrypoint resolves all paths relative to
-# itself (start-prod.js → ./index.js with absolute MCA_WEB_DIR set above).
+# itself (start-prod.js -> ./index.js with absolute MCA_WEB_DIR set above).
 
 Write-Host "Done. Useful commands:"
 Write-Host "  Start now : Start-Service $ServiceName"
 Write-Host "  Stop      : Stop-Service  $ServiceName"
 Write-Host "  Status    : Get-Service   $ServiceName"
-Write-Host "  Logs      : Get-EventLog Application -Source $ServiceName -Newest 50   (or set up file logging — see below)"
+Write-Host "  Logs      : Get-EventLog Application -Source $ServiceName -Newest 50   (or set up file logging -- see below)"
 Write-Host ""
 Write-Host "When the service is running, open http://localhost:$WebPort/"
 Write-Host ""

@@ -1,4 +1,4 @@
-# MyCodingAssistant — Windows Service uninstaller.
+# MyCodingAssistant -- Windows Service uninstaller.
 # Stops and deletes the service created by install-windows.ps1.
 # Requires Administrator.
 
