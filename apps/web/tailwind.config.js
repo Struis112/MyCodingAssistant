@@ -29,6 +29,15 @@ module.exports = {
         error: "rgb(var(--error) / <alpha-value>)",
         info: "rgb(var(--info) / <alpha-value>)",
         arg: "rgb(var(--arg) / <alpha-value>)",
+
+        // Per-chat-item-category accents. Aliased to base tokens by default
+        // (see globals.css) so editing one of them re-themes ONLY that
+        // category, not the whole UI. Drives every visual identity decision
+        // in apps/web/src/components/chat/styles.ts.
+        "user-accent": "rgb(var(--user-accent) / <alpha-value>)",
+        "assistant-accent": "rgb(var(--assistant-accent) / <alpha-value>)",
+        "tool-accent": "rgb(var(--tool-accent) / <alpha-value>)",
+        "system-accent": "rgb(var(--system-accent) / <alpha-value>)",
       },
       fontFamily: {
         mono: ["JetBrains Mono", "Fira Code", "Consolas", "monospace"],

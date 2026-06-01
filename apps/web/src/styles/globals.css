@@ -33,7 +33,26 @@
     --warning: 210 153 34; /* #d29922 */
     --error: 248 81 73; /* #f85149 */
     --info: 88 166 255;
-    --arg: 255 166 87; /* #ffa657 — tool argument highlight (AAA on card) */
+    --arg: 255 166 87; /* #ffa657 -- tool argument highlight (AAA on card) */
+
+    /*
+     * Per-chat-item-category accent colors.
+     *
+     * Each maps to one of the base palette tokens above so you get a
+     * single, coherent look out of the box. To recolor a single
+     * category (and only that category) independently of the rest of
+     * the palette, replace its line with a raw RGB triple:
+     *
+     *   --user-accent: 173 127 220;    (purple, no rgb() wrapper)
+     *
+     * The chat reads these via tailwind classes like text-user-accent,
+     * bg-tool-accent/15, border-system-accent. See chat/styles.ts for
+     * the per-subcategory mappings (per tool name, per status, etc.).
+     */
+    --user-accent: var(--primary);
+    --assistant-accent: var(--success);
+    --tool-accent: var(--info);
+    --system-accent: var(--warning);
   }
 
   /*
@@ -61,7 +80,13 @@
     --warning: 154 103 0; /* #9a6700 */
     --error: 207 34 46; /* #cf222e */
     --info: 9 105 218;
-    --arg: 128 56 0; /* #803800 — tool argument highlight (AAA on card) */
+    --arg: 128 56 0; /* #803800 -- tool argument highlight (AAA on card) */
+
+    /* Per-category accent aliases -- see comment in :root above. */
+    --user-accent: var(--primary);
+    --assistant-accent: var(--success);
+    --tool-accent: var(--info);
+    --system-accent: var(--warning);
   }
 
   /* First-visit fallback: follow the OS when no explicit theme class is set. */
@@ -84,6 +109,10 @@
       --error: 207 34 46;
       --info: 9 105 218;
       --arg: 128 56 0;
+      --user-accent: var(--primary);
+      --assistant-accent: var(--success);
+      --tool-accent: var(--info);
+      --system-accent: var(--warning);
     }
   }
 }

@@ -1,13 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Brain, Check, ChevronRight, Loader2, Wrench, X } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import type { ChatItem, ContentBlock } from "@/lib/store";
 import { cn, formatTimestamp } from "@/lib/utils";
 import type { MessageFilters } from "./types";
 import { DiffViewer } from "./DiffViewer";
 import { highlightImportant } from "./highlight";
+import {
+  accentClasses,
+  ASSISTANT_BLOCK_STYLES,
+  getToolStyle,
+  ITEM_STYLES,
+  TOOL_STATUS_STYLES,
+} from "./styles";
 import {
   firstArg,
   formatResult,
@@ -17,6 +23,36 @@ import {
   safeStringify,
   toolFilePath,
 } from "./utils";
+
+/**
+ * Reusable role pill ("You", "Assistant", "Tool", "System"). Pulls colour
+ * and icon from ITEM_STYLES so a single edit there re-themes every item.
+ */
+function RoleBadge({
+  kind,
+  streamingHint,
+}: {
+  kind: keyof typeof ITEM_STYLES;
+  /** Optional inline hint shown next to the timestamp (e.g. 'thinking…'). */
+  streamingHint?: React.ReactNode;
+}) {
+  const style = ITEM_STYLES[kind];
+  const c = accentClasses(style.accent);
+  const Icon = style.icon;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-bold uppercase tracking-wide",
+        c.bgSolid,
+        c.text,
+      )}
+    >
+      <Icon className="w-3 h-3" />
+      <span>{style.label}</span>
+      {streamingHint}
+    </span>
+  );
+}
 
 // =============================================================================
 // Dispatcher
@@ -40,13 +76,12 @@ export function ItemView({ item, filters }: { item: ChatItem; filters: MessageFi
 // =============================================================================
 
 function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
+  const rail = accentClasses(ITEM_STYLES.user.accent).rail;
   return (
     <div className="flex justify-start">
-      <div className="w-full border-l-2 border-primary pl-3 py-0.5 text-muted-foreground">
+      <div className={cn("w-full border-l-2 pl-3 py-0.5 text-muted-foreground", rail)}>
         <div className="flex items-center gap-2 mb-1">
-          <span className="rounded-full bg-primary/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-primary">
-            You
-          </span>
+          <RoleBadge kind="user" />
           <span className="text-xs text-muted-foreground/70">
             {formatTimestamp(item.timestamp)}
           </span>
@@ -72,17 +107,17 @@ function AssistantItem({
   const visibleBlocks = item.blocks.filter((b) =>
     b.type === "thinking" ? filters.thinking : filters.assistant,
   );
+  const rail = accentClasses(ITEM_STYLES.assistant.accent).rail;
+  const SpinnerIcon = TOOL_STATUS_STYLES.running.icon;
   return (
     <div className="flex justify-start">
-      <div className="w-full border-l-2 border-success/60 pl-3 text-foreground py-2">
+      <div className={cn("w-full border-l-2 pl-3 text-foreground py-2", rail, "border-opacity-60")}>
         <div className="flex items-center gap-2 mb-1">
-          <span className="rounded-full bg-success/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-success">
-            Assistant
-          </span>
+          <RoleBadge kind="assistant" />
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
           {item.isStreaming && item.blocks.length === 0 && (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="w-3 h-3 animate-spin" />
+              <SpinnerIcon className="w-3 h-3 animate-spin" />
               thinking…
             </span>
           )}
@@ -102,11 +137,16 @@ function AssistantItem({
 }
 
 function TextBlock({ block }: { block: Extract<ContentBlock, { type: "text" }> }) {
+  // The streaming cursor uses the same accent the assistant pill uses, so
+  // a recolour of --assistant-accent re-themes the cursor for free.
+  const cursorBg = accentClasses(ASSISTANT_BLOCK_STYLES.text.accent).rail.replace("border-", "bg-");
   return (
     <div className="break-words">
       <Markdown>{block.text}</Markdown>
       {block.isStreaming && (
-        <span className="inline-block w-[2px] h-4 align-text-bottom bg-primary cursor-blink ml-0.5" />
+        <span
+          className={cn("inline-block w-[2px] h-4 align-text-bottom cursor-blink ml-0.5", cursorBg)}
+        />
       )}
     </div>
   );
@@ -116,19 +156,22 @@ function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinki
   // Thinking is expanded by default and stays expanded; users can still
   // collapse it manually via the toggle.
   const [open, setOpen] = useState(true);
+  const style = ASSISTANT_BLOCK_STYLES.thinking;
+  const Caret = style.expandIcon!;
+  const Icon = style.icon!;
 
   return (
-    <div className="rounded-md border border-border/70 bg-accent/40 overflow-hidden">
+    <div className="overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors select-none"
+        className="flex items-center gap-1.5 w-full py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors select-none"
       >
-        <ChevronRight
+        <Caret
           className={cn("w-3 h-3 shrink-0 transition-transform duration-200", open && "rotate-90")}
         />
-        <Brain className={cn("w-3 h-3 shrink-0", block.isStreaming && "animate-pulse")} />
+        <Icon className={cn("w-3 h-3 shrink-0", block.isStreaming && "animate-pulse")} />
         <span>{block.isStreaming ? "Thinking…" : "Thought process"}</span>
       </button>
       {open && (
@@ -150,27 +193,47 @@ function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinki
 function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
   const [expanded, setExpanded] = useState(item.status === "error");
 
-  // Bash commands get a cleaner treatment: no wrench icon, no "Bash" label —
-  // just the command itself.
-  const isBash = item.toolName?.toLowerCase() === "bash";
+  // Per-tool style (icon + accent, with optional hideName) is centralised
+  // in chat/styles.ts. ToolItem just looks it up and renders.
+  const toolStyle = getToolStyle(item.toolName);
+  const ToolIcon = toolStyle.icon;
+  const toolAccent = accentClasses(toolStyle.accent);
+
+  const statusStyle = TOOL_STATUS_STYLES[item.status];
+  const StatusIcon = statusStyle.icon;
+  const statusAccent = accentClasses(statusStyle.accent);
+
   // File-based tools (Read/Edit/Write) expose a `path`; keep the full path but
   // surface the file name prominently so it's easy to scan the conversation.
   const filePath = toolFilePath(item.toolName, item.args);
+  const isBash = item.toolName?.toLowerCase() === "bash";
 
   return (
     <div className="flex justify-start">
-      <div className="w-full bg-card border border-border rounded-lg px-3 py-2">
+      <div
+        className={cn(
+          "w-full bg-card border rounded-lg px-3 py-2",
+          // Subtle left-rail accent matching the tool's category, so Reads,
+          // Edits, Bashes etc. are scannable even when collapsed.
+          "border-l-4",
+          toolAccent.rail,
+          // Outer rounded border stays neutral.
+          "border-y-border border-r-border",
+        )}
+      >
         <button
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-2 text-xs w-full text-left"
         >
-          {item.status === "running" && (
-            <Loader2 className="w-3 h-3 animate-spin text-warning shrink-0" />
-          )}
-          {item.status === "success" && <Check className="w-3 h-3 text-success shrink-0" />}
-          {item.status === "error" && <X className="w-3 h-3 text-error shrink-0" />}
-          {!isBash && !filePath && <Wrench className="w-3 h-3 text-primary shrink-0" />}
-          {!isBash && <span className="font-semibold shrink-0">{item.toolName}</span>}
+          <StatusIcon
+            className={cn(
+              "w-3 h-3 shrink-0",
+              statusAccent.text,
+              item.status === "running" && "animate-spin",
+            )}
+          />
+          <ToolIcon className={cn("w-3 h-3 shrink-0", toolAccent.text)} />
+          {!toolStyle.hideName && <span className="font-semibold shrink-0">{item.toolName}</span>}
           {(() => {
             const fa = firstArg(item.args);
             if (!fa) return null;
@@ -275,11 +338,12 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
 // =============================================================================
 
 function SystemItem({ item }: { item: Extract<ChatItem, { kind: "system" }> }) {
+  const c = accentClasses(ITEM_STYLES.system.accent);
   return (
     <div className="flex justify-start">
-      <div className="w-full bg-warning/10 border border-warning/30 text-warning rounded-lg px-4 py-2">
+      <div className={cn("w-full border rounded-lg px-4 py-2", c.bgTint, c.border, c.text)}>
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold uppercase">System</span>
+          <RoleBadge kind="system" />
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
         </div>
         <pre className="text-sm whitespace-pre-wrap font-mono">{item.text}</pre>
