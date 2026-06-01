@@ -1,8 +1,26 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import { cn } from "@/lib/utils";
+
+// Recursively flatten a node tree back to plain text. With rehype-highlight the
+// code children are React <span> elements (the highlighted tokens), so we can't
+// just String() them — we walk the tree to recover the raw source for the
+// copy button and the block/inline heuristic.
+function nodeText(node: ReactNode): string {
+  if (node == null || node === false || node === true) return "";
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (typeof node === "object" && "props" in node) {
+    return nodeText((node as { props: { children?: ReactNode } }).props.children);
+  }
+  return "";
+}
 
 // Renders assistant markdown using the app's AAA theme tokens. Kept as a
 // component map (rather than relying on a bundled highlight.js theme) so every
@@ -11,14 +29,38 @@ import remarkGfm from "remark-gfm";
 // Streaming-safe: react-markdown re-parses the partial string on each delta and
 // tolerates unclosed fences / half-written syntax.
 
-function CodeBlock({ className, children }: { className?: string; children?: React.ReactNode }) {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked — ignore */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label="Copy code"
+      title="Copy code"
+      className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
+
+function CodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
   const match = /language-(\w+)/.exec(className ?? "");
-  const text = String(children ?? "").replace(/\n$/, "");
-  const isBlock = Boolean(match) || text.includes("\n");
+  const raw = nodeText(children).replace(/\n$/, "");
+  const isBlock = Boolean(match) || raw.includes("\n");
 
   if (!isBlock) {
     return (
-      <code className="rounded bg-muted/40 px-1 py-0.5 font-mono text-[0.85em] text-foreground">
+      <code className="rounded border border-primary/25 bg-primary/10 px-1 py-0.5 font-mono text-[0.9em] text-primary">
         {children}
       </code>
     );
@@ -26,13 +68,15 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
 
   return (
     <div className="my-2 overflow-hidden rounded-md border border-border">
-      {match && (
-        <div className="border-b border-border bg-muted/30 px-3 py-1 font-mono text-xs text-muted-foreground">
-          {match[1]}
-        </div>
-      )}
-      <pre className="overflow-x-auto bg-muted/20 p-3 text-xs leading-relaxed">
-        <code className="font-mono text-foreground">{text}</code>
+      <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-1">
+        <span className="font-mono text-xs font-semibold text-primary">{match?.[1] ?? "text"}</span>
+        <span className="flex-1" />
+        <CopyButton text={raw} />
+      </div>
+      <pre className="overflow-x-auto bg-muted/15 p-3 text-[13px] leading-relaxed">
+        {/* className carries `hljs language-*`; token <span>s inside `children`
+            are styled via the .hljs-* rules in globals.css (AAA tokens). */}
+        <code className={cn("font-mono text-foreground", className)}>{children}</code>
       </pre>
     </div>
   );
@@ -95,7 +139,13 @@ const components: Components = {
 function MarkdownImpl({ children }: { children: string }) {
   return (
     <div className="text-sm leading-relaxed break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        // `ignoreMissing` keeps streaming safe: half-written fences or unknown
+        // languages won't throw mid-stream.
+        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        components={components}
+      >
         {children}
       </ReactMarkdown>
     </div>

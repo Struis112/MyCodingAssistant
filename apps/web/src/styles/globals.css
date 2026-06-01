@@ -92,6 +92,87 @@
   }
 }
 
+/*
+ * Syntax highlighting (rehype-highlight / highlight.js token classes).
+ *
+ * We deliberately do NOT import a bundled highlight.js theme: those hard-code
+ * hex colors that break our light/dark switch and aren't AAA-verified. Instead
+ * we map highlight.js's token classes onto the same AAA tokens used everywhere
+ * else, so code highlighting inherits the theme and stays contrast-compliant
+ * in both modes.
+ *
+ * Token → token-role mapping:
+ *   keyword / type / tag    → --primary   (blue)
+ *   string / addition       → --success   (green)
+ *   function / attr / prop   → --arg       (orange/brown)
+ *   number / symbol          → --warning   (amber)
+ *   comment / meta           → --muted-foreground (italic)
+ *   deletion                 → --error     (red)
+ */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-type,
+.hljs-literal,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-tag,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-operator {
+  color: rgb(var(--primary));
+}
+
+.hljs-string,
+.hljs-char,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: rgb(var(--success));
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_,
+.hljs-function .hljs-title,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property {
+  color: rgb(var(--arg));
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: rgb(var(--warning));
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta,
+.hljs-doctag {
+  color: rgb(var(--muted-foreground));
+  font-style: italic;
+}
+
+.hljs-deletion {
+  color: rgb(var(--error));
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-subst {
+  color: rgb(var(--foreground));
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 700;
+}
+
 /* Cursor blink animation */
 @keyframes blink {
   0%,
