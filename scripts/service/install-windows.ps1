@@ -99,6 +99,7 @@ $envValues = @(
     "WEB_PORT=$WebPort",
     "MCA_WEB_ORIGIN=http://localhost:$WebPort",
     "MCA_WEB_DIR=$(Join-Path $RepoRoot 'apps\web')",
+    "MCA_PROJECT_ROOT=$RepoRoot",
     "MCA_SUPERVISE_WEB=1",
     "NODE_ENV=production"
 )

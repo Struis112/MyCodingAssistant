@@ -26,6 +26,17 @@ import { registerWebSocketHandlers } from "./websocket/handlers.js";
 //   prod: apps/server/dist/index.js       → ../../web = apps/web
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+// Project root the agent operates inside. Used by:
+//   - PiSessionManager.cwd  (so the SDK puts auth/sessions in the right place)
+//   - /api/files/*           (so revert/read/save are confined to the project)
+//
+// Anchored to the entry script by default, so a service launched from
+// C:\Windows\System32 still finds the repo correctly. Override with
+// MCA_PROJECT_ROOT for setups where the server lives outside the repo.
+const PROJECT_ROOT = process.env.MCA_PROJECT_ROOT
+  ? path.resolve(process.env.MCA_PROJECT_ROOT)
+  : path.resolve(HERE, "..", "..", "..");
+
 const PORT = parseInt(process.env.PORT || "7641", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 // Allow the frontend origin to be overridden via env so devs running the web
@@ -53,7 +64,7 @@ const io = new SocketIOServer(httpServer, {
 // so today every chat:* event still resolves to the Pi SDK manager exactly
 // as before.
 const connectors = new ConnectorRegistry();
-connectors.register(createPiConnector());
+connectors.register(createPiConnector(PROJECT_ROOT));
 const piSessionManager = connectors.getDefaultManager();
 
 // Optional: keep the Next.js web server alive across crashes / updates.
@@ -96,7 +107,7 @@ app.post("/api/web/restart", async (_req, res) => {
   }
 });
 
-registerApiRoutes(app, piSessionManager);
+registerApiRoutes(app, piSessionManager, { cwd: PROJECT_ROOT });
 registerWebSocketHandlers(io, piSessionManager);
 
 // Forward web supervisor status to all connected clients so a future UI
