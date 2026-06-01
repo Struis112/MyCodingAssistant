@@ -154,7 +154,8 @@ describe("chat:send (idle)", () => {
     expect(opts.images).toHaveLength(1);
     expect(opts.images[0]).toMatchObject({
       type: "image",
-      source: { type: "base64", mediaType: "image/png", data: "ABC" },
+      data: "ABC",
+      mimeType: "image/png",
     });
   });
 

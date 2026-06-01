@@ -67,3 +67,7 @@ message-preview.html
 
 # Per-machine setup marker (written by scripts/setup.mjs)
 .mca-setup-done
+
+# Visual-verification snapshot for the chat UI; drift-prone and replaced by
+# the live rehype-highlight pipeline. Keep on disk, don't track.
+apps/web/preview-visual.html
