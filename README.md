@@ -71,21 +71,44 @@ packages/
   shared/                shared TS types
 ```
 
-## Dependency hygiene
+## Dependency hygiene & security
 
-The repo runs two automations on top of the regular CI pipeline (in
-`.github/workflows/ci.yml`):
+Four automations layered on top of the regular CI pipeline
+(`.github/workflows/ci.yml`):
 
-- **`.github/dependabot.yml`** — Monday 06:00 UTC. Opens grouped PRs for
-  minor + patch bumps (one PR for production deps, one for dev deps, one
-  for GitHub Actions). Major bumps come as individual PRs. The Pi SDK
-  itself is pinned to `latest` and intentionally ignored.
+- **`.github/dependabot.yml`** — Monday 06:00 UTC. Opens grouped PRs split
+  by update-type so patches and minors land separately:
+  - `production-patch` / `development-patch`: patch-only bumps,
+    auto-merged when green (see below).
+  - `production-minor` / `development-minor`: minor bumps, always require
+    a human review.
+  - `ci-actions`: GitHub Actions updates in a single PR.
+    Major bumps come as individual PRs. The Pi SDK itself tracks `latest`
+    and is intentionally ignored.
+- **`.github/workflows/auto-merge-dependabot.yml`** — on every Dependabot
+  PR. Reads the update-type via `dependabot/fetch-metadata`. If it's
+  patch-only, the workflow approves the PR and enables GitHub's native
+  auto-merge (squash). Auto-merge only fires once every required check
+  (CI verify, audit, CodeQL) is green; a red check holds the PR back.
+  Minor and major PRs are left open for a human.
 - **`.github/workflows/audit.yml`** — Monday 06:00 UTC, and also on every
   push or PR that touches a `package.json` / `package-lock.json`. Two-tier
   policy:
   - Production deps with high/critical advisories → **fails the run**.
   - Full tree (every severity, including dev deps) → informational only,
     rendered to the GitHub step summary alongside `npm outdated`.
+- **`.github/workflows/codeql.yml`** — every push/PR against `main`, plus
+  Monday 06:00 UTC. Static analysis for JS/TS source-level issues (taint
+  flows, missing input validation, dangerous APIs). Findings show up
+  under the repo's Security → Code scanning tab.
+
+For auto-merge to function the repo needs:
+
+- Settings → Actions → General → "Allow GitHub Actions to create and
+  approve pull requests" = ON.
+- Settings → General → Pull Requests → "Allow auto-merge" = ON.
+- Branch protection on `main` with the CI + audit + CodeQL checks listed
+  as required (so the bot can't merge a red PR).
 
 The lockfile is the source of truth (`npm ci` is what CI uses; it fails on
 any drift). If you need to force a transitive dep version because it can't

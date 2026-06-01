@@ -1,0 +1,90 @@
+# Auto-merge green Dependabot PATCH PRs.
+#
+# Why patches only:
+#   - SemVer says patch = backward-compatible bug fix. Lowest blast radius.
+#   - Minor bumps land features and occasionally deprecations; we want a
+#     human eye on those.
+#   - Major bumps are obviously hand-merged.
+#
+# What this does:
+#   1. On every PR Dependabot opens against main, read the PR metadata
+#      (dependabot/fetch-metadata).
+#   2. If the highest update-type in the PR is "patch":
+#        a. auto-approve the PR with the GITHUB_TOKEN (acts as
+#           "github-actions[bot]"); needed when branch protection on `main`
+#           requires at least 1 approving review.
+#        b. enable GitHub's native auto-merge (squash) which waits for all
+#           required status checks (CI, audit) before merging.
+#   3. If it's "minor" or "major", do nothing — the PR sits open for a human.
+#
+# Setup expected in the repo settings:
+#   - Settings -> Actions -> General -> "Allow GitHub Actions to create and
+#     approve pull requests" must be ON for github-actions[bot] reviews to
+#     count toward branch protection.
+#   - Auto-merge must be enabled on the repo (Settings -> General ->
+#     "Pull Requests" -> "Allow auto-merge").
+#   - Required status checks should include the CI verify + audit jobs so
+#     auto-merge can't merge a red PR.
+
+name: Auto-merge Dependabot (patch only)
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One run per PR; superseded by later events.
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if not a patch-only PR
+        if: steps.meta.outputs.update-type != 'version-update:semver-patch'
+        run: |
+          echo "::notice::Update-type is '${{ steps.meta.outputs.update-type }}', not patch — leaving PR for manual review."
+
+      - name: Approve patch PR
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr review --approve "$PR_URL" \
+            --body "Auto-approved: patch-level Dependabot update. CI + audit must still pass before merge."
+
+      - name: Enable auto-merge (squash)
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr merge --auto --squash "$PR_URL"
+
+      - name: Summary
+        if: always()
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPENDENCIES: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          {
+            echo "## Dependabot auto-merge"
+            echo
+            echo "- PR:                #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
+            echo "- Update-type:       \`${UPDATE_TYPE}\`"
+            echo "- Dependencies:      \`${DEPENDENCIES}\`"
+            echo "- Auto-merge action: $( [ "$UPDATE_TYPE" = "version-update:semver-patch" ] && echo 'approved + auto-merge enabled' || echo 'skipped (not patch)' )"
+          } >> "$GITHUB_STEP_SUMMARY"

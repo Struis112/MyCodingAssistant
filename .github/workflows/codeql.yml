@@ -1,0 +1,78 @@
+# CodeQL — source-level static analysis.
+#
+# Complements the dependency-level coverage from audit.yml + Dependabot:
+# audit.yml catches "a library you use has a known vulnerability"; CodeQL
+# catches "your own code does something insecure" (taint flows, missing
+# checks, dangerous APIs, etc.).
+#
+# Languages: JavaScript / TypeScript only. Both apps and packages are
+# .ts/.tsx so a single matrix entry covers the whole repo.
+#
+# Triggers:
+#   - Every push and PR against main, so regressions get caught at review time.
+#   - Weekly on Monday at 06:00 UTC to pick up newly-published CodeQL
+#     queries against an unchanged codebase.
+#
+# Findings appear under: GitHub repo -> Security tab -> "Code scanning".
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # CodeQL uploads SARIF results to GitHub's code-scanning service.
+  security-events: write
+  # Required for `actions/checkout` on PR events from forks (read-only).
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["javascript-typescript"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The default `security-and-quality` query suite covers both
+      # security issues and code-quality smells. Switch to `security-extended`
+      # if the quality findings get noisy.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      # JS/TS doesn't require a build step for CodeQL — the autobuilder can
+      # extract straight from source. We still run `npm ci` so any
+      # type-driven analysis sees real node_modules (e.g., resolves @types
+      # packages used by our source).
+      - name: Install deps (for type resolution)
+        run: npm ci
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

@@ -29,17 +29,25 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
       include: "scope"
+    # Groups are split by update-type so each opens its own PR. "patch" PRs
+    # are eligible for auto-merge (see .github/workflows/auto-merge-dependabot.yml);
+    # "minor" PRs always require a human reviewer. Mixing them in one group
+    # would defeat that — dependabot/fetch-metadata reports the *highest*
+    # update-type in a grouped PR, so a group with both minor and patch always
+    # reports "minor" and would never auto-merge.
     groups:
-      production-minor-patch:
+      production-patch:
         dependency-type: "production"
-        update-types:
-          - "minor"
-          - "patch"
-      development-minor-patch:
+        update-types: ["patch"]
+      production-minor:
+        dependency-type: "production"
+        update-types: ["minor"]
+      development-patch:
         dependency-type: "development"
-        update-types:
-          - "minor"
-          - "patch"
+        update-types: ["patch"]
+      development-minor:
+        dependency-type: "development"
+        update-types: ["minor"]
     # Ignore the Pi SDK's `latest` tag — we deliberately track it floating.
     # Dependabot still surfaces critical security advisories regardless.
     ignore:
