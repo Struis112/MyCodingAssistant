@@ -7,11 +7,25 @@
  * number. Pull that diff out, or return null when the result doesn't carry one.
  */
 export function getToolDiff(result: unknown): string | null {
+  return getToolDetailString(result, "diff");
+}
+
+/**
+ * The `edit` tool also exposes `details.patch`: a *standard* unified patch
+ * (`@@ -a,b +c,d @@` hunks) suitable for re-applying / reverse-applying. Pull
+ * it out so the diff viewer can offer a one-click revert. Returns null when
+ * the result doesn't carry one.
+ */
+export function getToolPatch(result: unknown): string | null {
+  return getToolDetailString(result, "patch");
+}
+
+function getToolDetailString(result: unknown, key: "diff" | "patch"): string | null {
   if (result && typeof result === "object") {
     const details = (result as { details?: unknown }).details;
     if (details && typeof details === "object") {
-      const diff = (details as { diff?: unknown }).diff;
-      if (typeof diff === "string" && diff.trim()) return diff;
+      const value = (details as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.trim()) return value;
     }
   }
   return null;

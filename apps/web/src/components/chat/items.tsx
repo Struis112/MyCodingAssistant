@@ -6,11 +6,13 @@ import { Markdown } from "@/components/Markdown";
 import type { ChatItem, ContentBlock } from "@/lib/store";
 import { cn, formatTimestamp } from "@/lib/utils";
 import type { MessageFilters } from "./types";
+import { DiffViewer } from "./DiffViewer";
 import { highlightImportant } from "./highlight";
 import {
   firstArg,
   formatResult,
   getToolDiff,
+  getToolPatch,
   middleEllipsis,
   safeStringify,
   toolFilePath,
@@ -40,9 +42,11 @@ export function ItemView({ item, filters }: { item: ChatItem; filters: MessageFi
 function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
   return (
     <div className="flex justify-start">
-      <div className="w-full border-l-2 border-primary/50 pl-3 py-0.5 text-muted-foreground">
+      <div className="w-full border-l-2 border-primary pl-3 py-0.5 text-muted-foreground">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-medium uppercase text-muted-foreground/70">You</span>
+          <span className="rounded-full bg-primary/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-primary">
+            You
+          </span>
           <span className="text-xs text-muted-foreground/70">
             {formatTimestamp(item.timestamp)}
           </span>
@@ -70,9 +74,11 @@ function AssistantItem({
   );
   return (
     <div className="flex justify-start">
-      <div className="w-full text-foreground py-2">
+      <div className="w-full border-l-2 border-success/60 pl-3 text-foreground py-2">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold uppercase">Assistant</span>
+          <span className="rounded-full bg-success/20 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-success">
+            Assistant
+          </span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
           {item.isStreaming && item.blocks.length === 0 && (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -224,10 +230,21 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
             {(() => {
               const diff = getToolDiff(item.result);
               if (diff && !item.isError) {
+                const patch = getToolPatch(item.result) ?? undefined;
+                const rawPath =
+                  item.args && typeof item.args === "object"
+                    ? (item.args as Record<string, unknown>).path
+                    : undefined;
+                const path = typeof rawPath === "string" ? rawPath : undefined;
                 return (
                   <div>
                     <div className="text-muted-foreground mb-1">diff:</div>
-                    <DiffView diff={diff} />
+                    <DiffViewer
+                      diff={diff}
+                      fileName={filePath?.base}
+                      filePath={path}
+                      patch={patch}
+                    />
                   </div>
                 );
               }
@@ -250,33 +267,6 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Render a unified-style diff string with `+`/`-`/` ` line prefixes. Added
- * lines green, removed red, context muted. Used by ToolItem when a tool
- * result carries `details.diff` (the SDK's `edit` tool does this).
- */
-function DiffView({ diff }: { diff: string }) {
-  const lines = diff.replace(/\n$/, "").split("\n");
-  return (
-    <pre className="rounded border border-border font-mono text-xs leading-relaxed overflow-x-auto">
-      {lines.map((line, i) => {
-        const marker = line[0];
-        const cls =
-          marker === "+"
-            ? "bg-success/10 text-success"
-            : marker === "-"
-              ? "bg-error/10 text-error"
-              : "text-muted-foreground";
-        return (
-          <div key={i} className={cn("px-2 whitespace-pre", cls)}>
-            {line.length ? line : " "}
-          </div>
-        );
-      })}
-    </pre>
   );
 }
 
