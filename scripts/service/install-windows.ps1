@@ -150,6 +150,16 @@ if ($LASTEXITCODE -ne 0) { Write-Error "nssm install failed (exit $LASTEXITCODE)
 
 # Environment: NSSM takes one big string of "KEY=VALUE" pairs joined by `r`n.
 # Listing each on its own line keeps the registry value readable.
+#
+# USERPROFILE/HOMEDRIVE/HOMEPATH are forwarded explicitly. The service
+# runs as LocalSystem by default, whose home dir is
+# C:\Windows\System32\config\systemprofile -- which means the Pi SDK's
+# os.homedir() lookup misses the user's ~/.pi/agent/auth.json and the
+# /api/models call returns 0 models. Forwarding the installing user's
+# USERPROFILE makes the SDK pick up the real auth file without having
+# to copy auth.json into systemprofile or run the service as the user
+# account (which would need a password).
+$UserProfile = if ($env:USERPROFILE) { $env:USERPROFILE } else { "$env:HOMEDRIVE$env:HOMEPATH" }
 $envBlock = (@(
     "PORT=$ApiPort",
     "WEB_PORT=$WebPort",
@@ -157,7 +167,10 @@ $envBlock = (@(
     "MCA_WEB_DIR=$(Join-Path $RepoRoot 'apps\web')",
     "MCA_PROJECT_ROOT=$RepoRoot",
     "MCA_SUPERVISE_WEB=1",
-    "NODE_ENV=production"
+    "NODE_ENV=production",
+    "USERPROFILE=$UserProfile",
+    "HOMEDRIVE=$(($UserProfile -split ':')[0]):",
+    "HOMEPATH=$(($UserProfile -replace '^[A-Za-z]:', ''))"
 ) -join [char]13 + [char]10)
 & $Nssm set $ServiceName AppEnvironmentExtra $envBlock    | Out-Null
 
