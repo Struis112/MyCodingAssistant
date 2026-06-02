@@ -110,16 +110,43 @@ $StderrLog = Join-Path $LogDir "mca.err.log"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 
 # ---- Remove existing service of the same name (idempotent re-install) ----
+# We try NSSM first (the right path for an NSSM-managed service). If it
+# bails -- which it does for services NOT installed by NSSM, e.g. one left
+# behind by the older sc.exe-based installer -- we fall back to sc.exe delete
+# so a single "reinstall" pass actually replaces *whatever* is there.
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "Stopping existing service '$ServiceName'..."
+    Write-Host "Existing service '$ServiceName' found ($($existing.Status)) -- removing..."
+
+    # Stop first (best effort). Stop-Service handles both NSSM and sc.exe
+    # registrations because it just talks to the SCM.
     if ($existing.Status -ne "Stopped") {
-        & $Nssm stop $ServiceName confirm | Out-Null
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+        # NSSM-managed services sometimes need NSSM stop too to clean up the
+        # wrapped child process; harmless on sc.exe-only services.
+        & $Nssm stop $ServiceName confirm 2>$null | Out-Null
         Start-Sleep -Seconds 2
     }
-    Write-Host "Removing existing service '$ServiceName'..."
-    & $Nssm remove $ServiceName confirm | Out-Null
+
+    # Try NSSM remove. Capture its exit code rather than relying on
+    # $ErrorActionPreference, because NSSM writes its diagnostics on stderr
+    # and exits non-zero on "not managed by this NSSM" without throwing a
+    # PowerShell exception.
+    & $Nssm remove $ServiceName confirm 2>$null | Out-Null
+    $removeExit = $LASTEXITCODE
+
     Start-Sleep -Seconds 1
+    $stillThere = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($stillThere) {
+        Write-Host "NSSM declined to remove the existing service (likely sc.exe-installed; nssm exit $removeExit). Falling back to sc.exe delete..."
+        & sc.exe delete $ServiceName | Out-Null
+        Start-Sleep -Seconds 2
+        if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            Write-Error "Could not remove existing service '$ServiceName' with either NSSM or sc.exe. Reboot or manually delete via 'sc.exe delete $ServiceName' and re-run."
+            exit 1
+        }
+    }
+    Write-Host "Removed."
 }
 
 # ---- Install + configure via NSSM ----
