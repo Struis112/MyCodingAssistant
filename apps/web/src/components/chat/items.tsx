@@ -175,7 +175,7 @@ function ThinkingBlock({ block }: { block: Extract<ContentBlock, { type: "thinki
         <span>{block.isStreaming ? "Thinking…" : "Thought process"}</span>
       </button>
       {open && (
-        <pre className="whitespace-pre-wrap break-words text-xs italic text-muted-foreground px-3 pb-2.5 pt-0.5 ml-2 border-l-2 border-border/60 leading-relaxed">
+        <pre className="whitespace-pre-wrap break-words text-xs italic text-muted-foreground pb-2.5 pt-0.5 leading-relaxed">
           {block.text}
           {block.isStreaming && (
             <span className="inline-block w-[2px] h-3 align-text-bottom bg-muted-foreground cursor-blink ml-0.5" />

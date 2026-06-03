@@ -3,14 +3,30 @@
 import { useEffect } from "react";
 import { ChatScreen } from "@/components/ChatScreen";
 import { SessionsView } from "@/components/SessionsView";
+import { ServicesView } from "@/components/ServicesView";
 import { Settings } from "@/components/Settings";
 import { Sidebar } from "@/components/Sidebar";
 import { useAppStore, readPersistedUserPrefs } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 
 export function AppShell() {
-  const { activeView, sessionId, currentModel, thinkingLevel, setCurrentModel, setThinkingLevel } =
-    useAppStore();
+  const {
+    activeView,
+    sessionId,
+    sessionFile,
+    currentModel,
+    thinkingLevel,
+    sessionName,
+    setCurrentModel,
+    setThinkingLevel,
+    setSessionName,
+    setSessionFile,
+  } = useAppStore();
+
+  // Keep the browser tab title in sync with the session's display name.
+  useEffect(() => {
+    document.title = sessionName ? `${sessionName} — MyCodingAssistant` : "MyCodingAssistant";
+  }, [sessionName]);
 
   // Hydrate persisted prefs after mount. Doing this here — instead of in the
   // store's initial state — keeps SSR + first client render byte-identical,
@@ -19,6 +35,7 @@ export function AppShell() {
     const prefs = readPersistedUserPrefs();
     if (prefs.currentModel) setCurrentModel(prefs.currentModel);
     if (prefs.thinkingLevel) setThinkingLevel(prefs.thinkingLevel);
+    if (prefs.sessionFile) setSessionFile(prefs.sessionFile);
     // Empty deps: run once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -31,7 +48,9 @@ export function AppShell() {
     const socket = getSocket();
 
     const sendInit = () => {
-      socket.emit("chat:state", { sessionId });
+      // Send the remembered session file so the server restores THIS client's
+      // specific conversation on reconnect (correct with many sessions).
+      socket.emit("chat:state", { sessionId, sessionFile });
     };
 
     const onState = (data: {
@@ -39,9 +58,15 @@ export function AppShell() {
       state: null | {
         model: { id: string; name: string; provider: string } | null;
         thinkingLevel: string;
+        name?: string | null;
       };
     }) => {
       if (data.sessionId !== sessionId) return;
+
+      // Adopt the server's stored session name (restored from the session file).
+      if (data.state && data.state.name !== undefined) {
+        setSessionName(data.state.name);
+      }
 
       // Pull the model the server reports (it may have one from the
       // restored session file even when localStorage is empty).
@@ -78,7 +103,15 @@ export function AppShell() {
       socket.off("connect", sendInit);
       socket.off("chat:state:result", onState);
     };
-  }, [sessionId, currentModel, thinkingLevel, setCurrentModel, setThinkingLevel]);
+  }, [
+    sessionId,
+    sessionFile,
+    currentModel,
+    thinkingLevel,
+    setCurrentModel,
+    setThinkingLevel,
+    setSessionName,
+  ]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -86,6 +119,7 @@ export function AppShell() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {activeView === "chat" && <ChatScreen />}
         {activeView === "sessions" && <SessionsView />}
+        {activeView === "services" && <ServicesView />}
         {activeView === "settings" && <Settings />}
       </main>
     </div>

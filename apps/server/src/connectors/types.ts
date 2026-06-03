@@ -29,6 +29,8 @@ export interface AgentLike {
   readonly sessionFile: string | undefined;
   /** Harness-native session id. */
   readonly sessionId: string;
+  /** User-defined display name for the session, if set. */
+  readonly sessionName: string | undefined;
   readonly model: AgentModel | null | undefined;
   readonly thinkingLevel: string;
 
@@ -45,6 +47,9 @@ export interface AgentLike {
   abort(): Promise<void>;
 
   setThinkingLevel(level: ThinkingLevel): void;
+
+  /** Set the session's display name (persists to the session file). */
+  setSessionName(name: string): void;
 
   /** Release any resources tied to this session. */
   dispose(): void;
@@ -86,9 +91,13 @@ export interface ConnectorManager {
 
   setSessionModel(sessionId: string, provider: string, modelId: string): Promise<AgentModel>;
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void;
+  /** Set the session display name; returns the resolved name. */
+  setSessionName(sessionId: string, name: string): string;
 
   listActiveSessions(): ActiveSessionInfo[];
   listPersistedSessions(): Promise<PersistedSessionDescriptor[]>;
+  /** Delete a persisted session file from disk. */
+  deletePersistedSession(sessionFile: string): Promise<void>;
 
   resumeSession(sessionId: string, sessionFile: string): Promise<AgentLike>;
   newSession(sessionId: string): Promise<AgentLike>;

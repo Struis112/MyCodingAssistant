@@ -12,11 +12,19 @@
 # What this script registers:
 #   binPath = <nssm.exe> -- and NSSM is configured to launch
 #   Application      : node.exe
-#   AppParameters    : apps\server\dist\start-prod.js
+#   AppParameters    : apps\server\dist\start-dev-supervised.js  (default)
+#                      apps\server\dist\start-prod.js            (MCA_PROD=1)
 #   AppDirectory     : <repo root>
 #   AppEnvironmentExtra : PORT, WEB_PORT, MCA_WEB_ORIGIN, MCA_WEB_DIR,
 #                         MCA_PROJECT_ROOT, MCA_SUPERVISE_WEB=1,
-#                         NODE_ENV=production
+#                         and per profile: NODE_ENV + (dev) MCA_WEB_DEV=1
+#
+# Profiles:
+#   default (dev)  -- supervised `next dev`: instant fast-refresh, the browser
+#                     auto-reloads on edits. Best for a machine you develop on.
+#   MCA_PROD=1     -- supervised `next start` against the production build:
+#                     optimised bundle, rebuild+restart on change (no in-browser
+#                     auto-refresh). Use for real deployments.
 #   AppStdout/AppStderr : logs\mca.log (rotated by NSSM)
 #   AppExit Default Restart, throttled
 #
@@ -32,6 +40,7 @@
 #   $env:MCA_SERVICE_DISPLAY = "MyCodingAssistant"
 #   $env:MCA_PORT            = "7641"
 #   $env:MCA_WEB_PORT        = "7642"
+#   $env:MCA_PROD            = "1"   # use the production build instead of dev fast-refresh
 
 $ErrorActionPreference = "Stop"
 
@@ -40,6 +49,8 @@ $ServiceName    = if ($env:MCA_SERVICE_NAME)    { $env:MCA_SERVICE_NAME }    els
 $ServiceDisplay = if ($env:MCA_SERVICE_DISPLAY) { $env:MCA_SERVICE_DISPLAY } else { "MyCodingAssistant" }
 $ApiPort        = if ($env:MCA_PORT)            { $env:MCA_PORT }            else { "7641" }
 $WebPort        = if ($env:MCA_WEB_PORT)        { $env:MCA_WEB_PORT }        else { "7642" }
+# Profile: dev fast-refresh by default; set MCA_PROD=1 for the production build.
+$ProdMode       = ($env:MCA_PROD -eq "1")
 
 # ---- Admin check ----
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -48,13 +59,15 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
-# ---- Resolve repo + entrypoint ----
+# ---- Resolve repo + entrypoint (profile-dependent) ----
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
-$Entry    = Join-Path $RepoRoot "apps\server\dist\start-prod.js"
+$EntryFile = if ($ProdMode) { "start-prod.js" } else { "start-dev-supervised.js" }
+$Entry    = Join-Path $RepoRoot "apps\server\dist\$EntryFile"
 if (-not (Test-Path $Entry)) {
     Write-Error "Cannot find $Entry. Run ``npm run build`` from the repo root first."
     exit 1
 }
+Write-Host ("Profile     : " + $(if ($ProdMode) { 'prod (next start)' } else { 'dev (next dev, fast-refresh)' }))
 
 # ---- Resolve node.exe ----
 $NodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
@@ -194,7 +207,8 @@ $envBlock = (@(
     "MCA_WEB_DIR=$(Join-Path $RepoRoot 'apps\web')",
     "MCA_PROJECT_ROOT=$RepoRoot",
     "MCA_SUPERVISE_WEB=1",
-    "NODE_ENV=production",
+    $(if ($ProdMode) { "NODE_ENV=production" } else { "NODE_ENV=development" }),
+    $(if ($ProdMode) { "MCA_WEB_DEV=0" } else { "MCA_WEB_DEV=1" }),
     "USERPROFILE=$UserProfile",
     "HOMEDRIVE=$(($UserProfile -split ':')[0]):",
     "HOMEPATH=$(($UserProfile -replace '^[A-Za-z]:', ''))"
@@ -216,10 +230,15 @@ $envBlock = (@(
 & $Nssm set $ServiceName AppRestartDelay 5000             | Out-Null
 & $Nssm set $ServiceName AppThrottle 10000                | Out-Null  # 10 s minimum lifetime
 
-# Graceful shutdown: send Ctrl+Break, wait 8 s, then kill the tree.
-& $Nssm set $ServiceName AppStopMethodConsole 8000        | Out-Null
-& $Nssm set $ServiceName AppStopMethodWindow  8000        | Out-Null
-& $Nssm set $ServiceName AppStopMethodThreads 8000        | Out-Null
+# Graceful shutdown: send Ctrl-C/Ctrl+Break, give the app a short window to
+# exit cleanly, then kill the process tree. The server's own shutdown handler
+# exits in well under a second (it closes WebSockets so httpServer.close()
+# resolves immediately), so 3 s per method is plenty. Keeping these SMALL is
+# important: a slow stop makes `Restart-Service` time out and never issue the
+# start, which looks like "the service stopped and never came back".
+& $Nssm set $ServiceName AppStopMethodConsole 3000        | Out-Null
+& $Nssm set $ServiceName AppStopMethodWindow  3000        | Out-Null
+& $Nssm set $ServiceName AppStopMethodThreads 3000        | Out-Null
 & $Nssm set $ServiceName AppKillProcessTree 1             | Out-Null
 
 Write-Host "Done. Useful commands:"

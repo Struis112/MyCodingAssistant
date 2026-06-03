@@ -1,0 +1,458 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleSlash,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Square,
+  TriangleAlert,
+} from "lucide-react";
+import { getSocket } from "@/lib/socket";
+import { cn } from "@/lib/utils";
+
+const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:7641";
+
+type ServiceState =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "validating"
+  | "rebuilding"
+  | "repairing"
+  | "backoff"
+  | "failed";
+
+interface ServiceStatus {
+  name: string;
+  description: string;
+  state: ServiceState;
+  pid?: number;
+  port?: number;
+  startedAt?: number;
+  uptimeMs?: number;
+  restarts: number;
+  maxRestarts: number;
+  nextRestartAt?: number;
+  lastError?: string;
+  lastRepair?: string;
+  hotReloadEnabled: boolean;
+  mode?: string;
+}
+
+interface LogLine {
+  ts: number;
+  stream: "out" | "err" | "sys";
+  text: string;
+}
+
+/**
+ * Services inventory. Lists every supervised service the server reports
+ * (`GET /api/services`, live updates via the `services:status` socket event)
+ * and lets you restart each one. Designed to be low-cognitive-load: one card
+ * per service, a plain-language status line, and details on demand.
+ */
+export function ServicesView() {
+  const [services, setServices] = useState<ServiceStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/services`);
+      if (res.ok) setServices(await res.json());
+    } catch {
+      /* server unreachable — leave last-known list */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const socket = getSocket();
+    const onStatus = (list: ServiceStatus[]) => setServices(list);
+    socket.on("services:status", onStatus);
+    refresh();
+    // Light polling backstop for uptime ticking + missed events.
+    const id = setInterval(refresh, 5_000);
+    return () => {
+      socket.off("services:status", onStatus);
+      clearInterval(id);
+    };
+  }, [refresh]);
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      <header className="h-8 border-b border-border flex items-center px-3 gap-2 shrink-0">
+        <Activity className="w-4 h-4 text-primary" />
+        <h1 className="text-xs font-semibold text-foreground">Services</h1>
+        <div className="flex-1" />
+        <button
+          onClick={refresh}
+          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          title="Refresh"
+          aria-label="Refresh services"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading && services.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-60" />
+            <p className="text-sm">Loading services…</p>
+          </div>
+        ) : services.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <CircleSlash className="w-12 h-12 mb-4 opacity-50" />
+            <p className="text-sm">No services reported</p>
+            <p className="text-xs mt-2">Is the API server running on {SERVER_URL}?</p>
+          </div>
+        ) : (
+          <div className="space-y-3 max-w-3xl mx-auto">
+            {services.map((svc) => (
+              <ServiceCard key={svc.name} svc={svc} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ----- presentation helpers -----
+
+const STATE_META: Record<
+  ServiceState,
+  { label: string; tone: string; Icon: typeof CircleCheck; spin?: boolean }
+> = {
+  running: {
+    label: "Running",
+    tone: "text-success border-success/40 bg-success/10",
+    Icon: CircleCheck,
+  },
+  starting: {
+    label: "Starting",
+    tone: "text-warning border-warning/40 bg-warning/10",
+    Icon: Loader2,
+    spin: true,
+  },
+  validating: {
+    label: "Validating",
+    tone: "text-info border-info/40 bg-info/10",
+    Icon: Loader2,
+    spin: true,
+  },
+  rebuilding: {
+    label: "Rebuilding",
+    tone: "text-info border-info/40 bg-info/10",
+    Icon: Loader2,
+    spin: true,
+  },
+  repairing: {
+    label: "Self-repairing",
+    tone: "text-info border-info/40 bg-info/10",
+    Icon: Loader2,
+    spin: true,
+  },
+  backoff: {
+    label: "Restarting soon",
+    tone: "text-warning border-warning/40 bg-warning/10",
+    Icon: TriangleAlert,
+  },
+  failed: { label: "Failed", tone: "text-error border-error/40 bg-error/10", Icon: TriangleAlert },
+  stopped: {
+    label: "Stopped",
+    tone: "text-muted-foreground border-border bg-muted/40",
+    Icon: CircleSlash,
+  },
+};
+
+function formatUptime(ms?: number): string {
+  if (!ms || ms < 0) return "—";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+type Action = "start" | "stop" | "restart";
+
+/** A compact, consistent lifecycle button (Start / Stop / Restart). */
+function ActionButton({
+  label,
+  Icon,
+  onClick,
+  disabled,
+  spinning,
+  title,
+  ariaLabel,
+}: {
+  label: string;
+  Icon: typeof RotateCw;
+  onClick: () => void;
+  disabled: boolean;
+  spinning: boolean;
+  title: string;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+      className={cn(
+        "flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded border transition-colors w-full justify-center",
+        disabled
+          ? "opacity-50 cursor-not-allowed border-border text-muted-foreground"
+          : "border-border text-foreground hover:border-primary/40 hover:text-primary",
+      )}
+    >
+      <Icon className={cn("w-3.5 h-3.5", spinning && "animate-spin")} />
+      {label}
+    </button>
+  );
+}
+
+function ServiceCard({ svc }: { svc: ServiceStatus }) {
+  const [busy, setBusy] = useState<Action | null>(null);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logs, setLogs] = useState<LogLine[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const meta = STATE_META[svc.state];
+  const StateIcon = meta.Icon;
+  const selfManaged = svc.maxRestarts === 0; // the API server reports on itself
+  // "Active" = the supervisor is trying to keep it up; Stop applies here and
+  // Start is a no-op. Stopped/failed are the only states where Start makes sense.
+  const active = [
+    "running",
+    "starting",
+    "validating",
+    "rebuilding",
+    "repairing",
+    "backoff",
+  ].includes(svc.state);
+
+  const runAction = useCallback(
+    async (action: Action) => {
+      setBusy(action);
+      setError(null);
+      try {
+        const res = await fetch(`${SERVER_URL}/api/services/${svc.name}/${action}`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setError(body.error || `${action} failed (${res.status})`);
+        }
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [svc.name],
+  );
+
+  const loadLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/services/${svc.name}/logs`);
+      if (res.ok) setLogs(await res.json());
+    } catch {
+      /* ignore */
+    }
+  }, [svc.name]);
+
+  const toggleLogs = useCallback(() => {
+    setLogsOpen((open) => {
+      if (!open) void loadLogs();
+      return !open;
+    });
+  }, [loadLogs]);
+
+  const summary = useMemo(() => describeStatus(svc), [svc]);
+
+  return (
+    <div className="border border-border rounded-lg bg-card overflow-hidden">
+      <div className="flex items-start gap-3 p-3">
+        <span
+          className={cn(
+            "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-medium shrink-0",
+            meta.tone,
+          )}
+        >
+          <StateIcon className={cn("w-3.5 h-3.5", meta.spin && "animate-spin")} />
+          {meta.label}
+        </span>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-card-foreground truncate">{svc.name}</h2>
+            {svc.mode && (
+              <span
+                className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1 py-0.5"
+                title={
+                  svc.mode === "dev"
+                    ? "Dev profile — fast-refresh, served by `next dev`"
+                    : svc.mode === "prod"
+                      ? "Production profile — built bundle, served by `next start`"
+                      : `Run profile: ${svc.mode}`
+                }
+              >
+                {svc.mode}
+              </span>
+            )}
+            {svc.hotReloadEnabled && (
+              <span
+                className="text-[10px] uppercase tracking-wide text-info border border-info/40 rounded px-1 py-0.5"
+                title="Serves the latest code automatically on change"
+              >
+                hot-reload
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground truncate">{svc.description}</p>
+          <p className="text-xs text-muted-foreground mt-1">{summary}</p>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
+            {svc.port !== undefined && <span>port {svc.port}</span>}
+            {svc.pid !== undefined && <span>pid {svc.pid}</span>}
+            {svc.state === "running" && <span>up {formatUptime(svc.uptimeMs)}</span>}
+            {svc.maxRestarts > 0 && (
+              <span>
+                restarts {svc.restarts}/{svc.maxRestarts}
+              </span>
+            )}
+          </div>
+
+          {svc.lastRepair && (
+            <p className="text-xs text-info mt-2">
+              <span className="font-medium">Self-repair:</span> {svc.lastRepair}
+            </p>
+          )}
+          {svc.state === "failed" && svc.lastError && (
+            <p className="text-xs text-error mt-2 break-words">{svc.lastError}</p>
+          )}
+          {error && <p className="text-xs text-error mt-2 break-words">{error}</p>}
+        </div>
+
+        <div className="flex flex-col gap-1.5 shrink-0 w-[88px]">
+          <ActionButton
+            label="Start"
+            Icon={Play}
+            onClick={() => runAction("start")}
+            spinning={busy === "start"}
+            disabled={!!busy || selfManaged || active}
+            title={
+              selfManaged
+                ? "This service manages its own process and can't be controlled from here"
+                : active
+                  ? "Already running"
+                  : `Start ${svc.name}`
+            }
+            ariaLabel={`Start ${svc.name}`}
+          />
+          <ActionButton
+            label="Stop"
+            Icon={Square}
+            onClick={() => runAction("stop")}
+            spinning={busy === "stop"}
+            disabled={!!busy || selfManaged || !active}
+            title={
+              selfManaged
+                ? "This service manages its own process and can't be controlled from here"
+                : !active
+                  ? "Not running"
+                  : `Stop ${svc.name}`
+            }
+            ariaLabel={`Stop ${svc.name}`}
+          />
+          <ActionButton
+            label="Restart"
+            Icon={RotateCw}
+            onClick={() => runAction("restart")}
+            spinning={busy === "restart"}
+            disabled={!!busy || selfManaged}
+            title={
+              selfManaged
+                ? "This service manages its own process and can't be controlled from here"
+                : `Restart ${svc.name}`
+            }
+            ariaLabel={`Restart ${svc.name}`}
+          />
+        </div>
+      </div>
+
+      <button
+        onClick={toggleLogs}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border-t border-border transition-colors"
+        aria-expanded={logsOpen}
+      >
+        {logsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Recent logs
+      </button>
+      {logsOpen && (
+        <pre className="max-h-64 overflow-auto bg-background border-t border-border px-3 py-2 text-[11px] leading-relaxed font-mono">
+          {logs.length === 0 ? (
+            <span className="text-muted-foreground">No logs captured yet.</span>
+          ) : (
+            logs.map((l, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "whitespace-pre-wrap break-words",
+                  l.stream === "err" && "text-error",
+                  l.stream === "sys" && "text-info",
+                  l.stream === "out" && "text-foreground",
+                )}
+              >
+                {l.text}
+              </div>
+            ))
+          )}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** One calm sentence describing what the service is doing right now. */
+function describeStatus(svc: ServiceStatus): string {
+  switch (svc.state) {
+    case "running":
+      return "Healthy and serving requests.";
+    case "starting":
+      return "Spinning up…";
+    case "validating":
+      return "Checking your latest change builds cleanly before activating it…";
+    case "rebuilding":
+      return "Rebuilding to serve your latest changes…";
+    case "repairing":
+      return "Crashed — checking logs and attempting an automatic fix…";
+    case "backoff": {
+      const secs = svc.nextRestartAt
+        ? Math.max(0, Math.round((svc.nextRestartAt - Date.now()) / 1000))
+        : null;
+      return secs !== null
+        ? `Crashed — retrying in ${secs}s (attempt ${svc.restarts}/${svc.maxRestarts}).`
+        : `Crashed — retrying (attempt ${svc.restarts}/${svc.maxRestarts}).`;
+    }
+    case "failed":
+      return `Gave up after ${svc.restarts} attempt${svc.restarts === 1 ? "" : "s"}. Fix the cause, then restart manually.`;
+    case "stopped":
+      return "Not running.";
+    default:
+      return "";
+  }
+}

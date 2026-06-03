@@ -50,14 +50,18 @@ export function writeJSON(key: string, value: unknown): void {
 export function readPersistedUserPrefs(): {
   currentModel: ModelInfo | null;
   thinkingLevel: string;
+  sessionFile: string | undefined;
 } {
   return {
     currentModel: readJSON<ModelInfo | null>("mca-model", null),
     thinkingLevel: readString("mca-thinking-level", "off"),
+    // Remembered so a reconnect (reload or server restart) restores THIS
+    // client's specific conversation, not just the most-recent one.
+    sessionFile: readString("mca-session-file", "") || undefined,
   };
 }
 
-export type View = "chat" | "sessions" | "settings";
+export type View = "chat" | "sessions" | "services" | "settings";
 
 // ----- Chat items -----
 //
@@ -133,6 +137,11 @@ interface AppState {
   sessionFile: string | undefined;
   setSessionFile: (path: string | undefined) => void;
 
+  // User-defined session display name (set via the `/name` command). Shown
+  // in the chat header + browser tab. Null until the user names the session.
+  sessionName: string | null;
+  setSessionName: (name: string | null) => void;
+
   // Persisted session list (server returns these on `chat:list`).
   persistedSessions: PersistedSession[];
   setPersistedSessions: (sessions: PersistedSession[]) => void;
@@ -172,7 +181,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionId: "default",
   setSessionId: (id) => set({ sessionId: id }),
   sessionFile: undefined,
-  setSessionFile: (path) => set({ sessionFile: path }),
+  setSessionFile: (path) => {
+    writeString("mca-session-file", path ?? "");
+    set({ sessionFile: path });
+  },
+
+  sessionName: null,
+  setSessionName: (name) => set({ sessionName: name }),
 
   persistedSessions: [],
   setPersistedSessions: (sessions) => set({ persistedSessions: sessions }),

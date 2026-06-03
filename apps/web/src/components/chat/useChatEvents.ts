@@ -35,6 +35,7 @@ export function useChatEvents() {
     setIsStreaming,
     sessionId,
     setSessionFile,
+    setSessionName,
   } = useAppStore();
 
   // Holds the id of the currently-streaming assistant item so deltas can
@@ -215,32 +216,70 @@ export function useChatEvents() {
     const onResumed = (data: {
       sessionId: string;
       sessionFile?: string;
+      name?: string | null;
       messages?: RawMessage[];
     }) => {
       if (data.sessionId !== sessionId) return;
       setSessionFile(data.sessionFile);
+      setSessionName(data.name ?? null);
       const restored = agentMessagesToChatItems(data.messages || []);
       setItems(restored);
     };
 
-    const onNew = (data: { sessionId: string; sessionFile?: string }) => {
+    // chat:state:result is the server's answer to the chat:state we send on
+    // every (re)connect. After a server restart or a plain browser reload the
+    // local item list is empty while the server holds the persisted history,
+    // so rehydrate from it. Guard on an empty list so a reconnect during an
+    // active chat can't clobber in-flight items.
+    const onState = (data: {
+      sessionId: string;
+      state: null | { sessionFile?: string; name?: string | null; messages?: RawMessage[] };
+    }) => {
+      if (data.sessionId !== sessionId) return;
+      const st = data.state;
+      if (!st) return;
+      if (st.sessionFile) setSessionFile(st.sessionFile);
+      if (st.name !== undefined) setSessionName(st.name ?? null);
+      const msgs = st.messages;
+      if (msgs && msgs.length > 0 && useAppStore.getState().items.length === 0) {
+        setItems(agentMessagesToChatItems(msgs));
+      }
+    };
+
+    const onNew = (data: { sessionId: string; sessionFile?: string; name?: string | null }) => {
       if (data.sessionId !== sessionId) return;
       setSessionFile(data.sessionFile);
+      setSessionName(data.name ?? null);
       clearItems();
+    };
+
+    const onNameChanged = (data: { sessionId: string; name: string }) => {
+      if (data.sessionId !== sessionId) return;
+      setSessionName(data.name);
+      addItem({
+        kind: "system",
+        id: generateId(),
+        text: `Renamed session to “${data.name}”.`,
+        timestamp: Date.now(),
+      });
     };
 
     socket.on("chat:event", onEvent);
     socket.on("chat:done", onDone);
     socket.on("chat:error", onError);
     socket.on("chat:resumed", onResumed);
+    socket.on("chat:state:result", onState);
     socket.on("chat:new", onNew);
+    socket.on("session:nameChanged", onNameChanged);
 
     return () => {
       socket.off("chat:event", onEvent);
       socket.off("chat:done", onDone);
       socket.off("chat:error", onError);
       socket.off("chat:resumed", onResumed);
+      socket.off("chat:state:result", onState);
       socket.off("chat:new", onNew);
+      socket.off("session:nameChanged", onNameChanged);
     };
   }, [
     sessionId,
@@ -251,5 +290,6 @@ export function useChatEvents() {
     setItems,
     clearItems,
     setSessionFile,
+    setSessionName,
   ]);
 }

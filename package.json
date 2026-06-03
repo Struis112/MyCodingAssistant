@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "dev": "npm run dev:server & npm run dev:web",
+    "dev:supervised": "npm run dev:supervised --workspace=@mca/server",
     "dev:web": "npm run dev --workspace=@mca/web",
     "dev:server": "npm run dev --workspace=@mca/server",
     "build": "npm run build --workspaces",

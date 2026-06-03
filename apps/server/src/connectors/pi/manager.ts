@@ -6,6 +6,7 @@
 // This file moved from `apps/server/src/services/pi-session.ts` as part of
 // the multi-connector refactor (Phase A). Behaviour is unchanged.
 
+import { unlink } from "node:fs/promises";
 import {
   AuthStorage,
   createAgentSession,
@@ -96,6 +97,18 @@ export class PiSessionManager implements ConnectorManager {
     session.setThinkingLevel(level);
   }
 
+  /**
+   * Set the session's display name. Persists a `session_info` entry to the
+   * session file, so the name also surfaces in the persisted-session list
+   * (Sessions screen) on the next `list()`.
+   */
+  setSessionName(sessionId: string, name: string): string {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session ${sessionId} not found`);
+    session.setSessionName(name);
+    return session.sessionName ?? name;
+  }
+
   listActiveSessions(): ActiveSessionInfo[] {
     return Array.from(this.sessions.entries()).map(([id, session]) => ({
       id,
@@ -124,6 +137,20 @@ export class PiSessionManager implements ConnectorManager {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Delete a persisted session file from disk. Disposes any in-memory session
+   * currently backed by that file first so we don't write it back out.
+   */
+  async deletePersistedSession(sessionFile: string): Promise<void> {
+    if (!sessionFile) throw new Error("sessionFile is required");
+    for (const [id, session] of this.sessions) {
+      if (session.sessionFile === sessionFile) {
+        this.disposeSession(id);
+      }
+    }
+    await unlink(sessionFile);
   }
 
   /** Replace the session on a given id with one opened from a file. */

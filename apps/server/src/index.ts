@@ -11,7 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConnectorRegistry } from "./connectors/registry.js";
 import { createPiConnector } from "./connectors/pi/index.js";
-import { WebSupervisor, type WebStatus } from "./services/web-supervisor.js";
+import { ServiceRegistry, createWebService } from "./services/service-registry.js";
+import type { ServiceStatus } from "./services/service-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 
@@ -73,8 +74,43 @@ const piSessionManager = connectors.getDefaultManager();
 const webPort = parseInt(process.env.WEB_PORT || "7642", 10);
 const webDir = process.env.MCA_WEB_DIR || path.resolve(HERE, "..", "..", "web");
 
-const webSupervisor =
-  process.env.MCA_SUPERVISE_WEB === "1" ? new WebSupervisor({ webDir, port: webPort }) : null;
+// Service registry — the single inventory behind the "Services" screen.
+// Every supervised service follows the project standards: hot-reload
+// (watch + rebuild + restart) and self-repair (retry once/min, max 50).
+const services = new ServiceRegistry();
+
+// The API server reports on itself so it shows up in the inventory, even
+// though it can't supervise its own process. Restart is handled by the OS
+// service / `tsx watch` in dev.
+const serverStartedAt = Date.now();
+services.registerSelfReported({
+  name: "api",
+  description: `API + WebSocket server (port ${PORT})`,
+  port: PORT,
+  getStatus: (): ServiceStatus => ({
+    name: "api",
+    description: `API + WebSocket server (port ${PORT})`,
+    state: "running",
+    pid: process.pid,
+    port: PORT,
+    startedAt: serverStartedAt,
+    uptimeMs: Math.round(process.uptime() * 1000),
+    restarts: 0,
+    maxRestarts: 0,
+    hotReloadEnabled: process.env.NODE_ENV !== "production",
+  }),
+});
+
+// The web UI is supervised when MCA_SUPERVISE_WEB=1 (implicit in prod via
+// start-prod.ts). Off in dev so it doesn't fight `npm run dev:web`.
+//
+// MCA_WEB_DEV=1 picks the dev profile: the supervisor runs `next dev` instead
+// of `next start`, giving instant fast-refresh + browser auto-refresh (no
+// rebuild loop). Handy when you want supervision *and* a live dev UI.
+const webDevMode = process.env.MCA_WEB_DEV === "1";
+if (process.env.MCA_SUPERVISE_WEB === "1") {
+  services.register(createWebService({ webDir, port: webPort, dev: webDevMode }));
+}
 
 // Health check
 app.get("/health", (_req, res) => {
@@ -82,66 +118,115 @@ app.get("/health", (_req, res) => {
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    web: webSupervisor?.getStatus() ?? { state: "disabled" },
+    services: services.list(),
   });
 });
 
-// Web supervisor status + manual control
+// ----- Services inventory + control -----
+app.get("/api/services", (_req, res) => {
+  res.json(services.list());
+});
+
+app.get("/api/services/:name/logs", (req, res) => {
+  if (!services.has(req.params.name)) {
+    res.status(404).json({ error: `Unknown service: ${req.params.name}` });
+    return;
+  }
+  res.json(services.getLogs(req.params.name));
+});
+
+// Lifecycle control: start | stop | restart. One handler, three verbs.
+for (const action of ["start", "stop", "restart"] as const) {
+  app.post(`/api/services/:name/${action}`, async (req, res) => {
+    if (!services.has(req.params.name)) {
+      res.status(404).json({ success: false, error: `Unknown service: ${req.params.name}` });
+      return;
+    }
+    const result = await services[action](req.params.name);
+    if (!result.ok) {
+      res.status(400).json({ success: false, error: result.reason });
+      return;
+    }
+    res.json({ success: true, status: services.list() });
+  });
+}
+
+// Backwards-compatible web-only aliases.
 app.get("/api/web/status", (_req, res) => {
-  res.json(webSupervisor?.getStatus() ?? { state: "disabled" });
+  const web = services.list().find((s) => s.name === "web");
+  res.json(web ?? { state: "disabled" });
 });
 
 app.post("/api/web/restart", async (_req, res) => {
-  if (!webSupervisor) {
-    res.status(400).json({
-      error:
-        "Web supervisor is not running. Start the server with MCA_SUPERVISE_WEB=1 (or `npm run start`).",
-    });
+  const result = await services.restart("web");
+  if (!result.ok) {
+    res.status(400).json({ error: result.reason });
     return;
   }
-  try {
-    await webSupervisor.restart();
-    res.json({ success: true, status: webSupervisor.getStatus() });
-  } catch (err) {
-    res.status(500).json({ success: false, error: String(err) });
-  }
+  res.json({ success: true, status: services.list() });
 });
 
 registerApiRoutes(app, piSessionManager, { cwd: PROJECT_ROOT });
 registerWebSocketHandlers(io, piSessionManager);
 
-// Forward web supervisor status to all connected clients so a future UI
-// can show a small indicator.
-if (webSupervisor) {
-  webSupervisor.on("status", (status: WebStatus) => {
-    io.emit("web:status", status);
-  });
-}
+// Forward service-status changes to all connected clients so the Services
+// screen updates live.
+services.on("status", (list: ServiceStatus[]) => {
+  io.emit("services:status", list);
+});
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`[MCA Server] Running on http://${HOST}:${PORT}`);
   console.log("[MCA Server] WebSocket ready for frontend connections");
-  if (webSupervisor) {
-    console.log(`[MCA Server] Web supervisor enabled — will keep port ${webPort} alive`);
-    void webSupervisor.start();
+  if (process.env.MCA_SUPERVISE_WEB === "1") {
+    console.log(
+      webDevMode
+        ? `[MCA Server] Web service supervised — dev / fast-refresh on port ${webPort}`
+        : `[MCA Server] Web service supervised — hot-reload + self-repair on port ${webPort}`,
+    );
+    void services.startAll();
   } else {
     console.log("[MCA Server] Web supervisor disabled (set MCA_SUPERVISE_WEB=1 to enable)");
   }
 });
 
+let shuttingDown = false;
 async function shutdown() {
+  // The service manager (NSSM) may deliver the stop signal more than once;
+  // make shutdown idempotent so we don't run teardown twice.
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log("\n[MCA Server] Shutting down...");
-  if (webSupervisor) {
-    await webSupervisor.stop().catch(() => {});
+
+  // Guaranteed exit: a non-unref'd timer so the process always terminates
+  // quickly even if a close hangs. Keeping this short is what lets the service
+  // manager's stop -> start cycle complete (a slow stop makes Restart-Service
+  // give up before issuing the start).
+  const hardExit = setTimeout(() => {
+    console.log("[MCA Server] Forced exit (graceful close timed out)");
+    process.exit(0);
+  }, 3_000);
+
+  // Close socket.io FIRST and drop client connections. Otherwise the live
+  // WebSocket connections keep httpServer.close()'s callback from ever firing,
+  // which is what made shutdown drag out to the hard-exit timeout.
+  try {
+    io.disconnectSockets(true);
+    io.close();
+  } catch {
+    /* best effort */
   }
+
+  await services.stopAll().catch(() => {});
   connectors.disposeAll();
   httpServer.close(() => {
+    clearTimeout(hardExit);
     console.log("[MCA Server] Stopped");
     process.exit(0);
   });
-  // Hard-exit after 8s if something hangs
-  setTimeout(() => process.exit(1), 8_000).unref();
 }
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+// Windows: NSSM's default stop sends a console Ctrl+Break, surfaced as SIGBREAK.
+process.on("SIGBREAK", shutdown);

@@ -71,3 +71,7 @@ message-preview.html
 # Visual-verification snapshot for the chat UI; drift-prone and replaced by
 # the live rehype-highlight pipeline. Keep on disk, don't track.
 apps/web/preview-visual.html
+
+# Per-machine tools (e.g. nssm.exe for the Windows-service installer).
+# Each dev fetches their own via winget/choco/scoop/manual download.
+tools/

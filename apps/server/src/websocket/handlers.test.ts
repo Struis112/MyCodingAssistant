@@ -99,11 +99,13 @@ function makePiStub(session = makeSessionStub()) {
       provider: p,
     })),
     setSessionThinkingLevel: vi.fn(),
+    setSessionName: vi.fn((_: string, name: string) => name),
     newSession: vi.fn(async () => session),
     resumeSession: vi.fn(async () => session),
     listPersistedSessions: vi.fn(async () => [
       { id: "s1", path: "/tmp/s1.jsonl", name: "Session", modifiedAt: 1 },
     ]),
+    deletePersistedSession: vi.fn(async () => {}),
     session,
   };
 }
@@ -245,6 +247,28 @@ describe("chat:list", () => {
   });
 });
 
+describe("chat:delete", () => {
+  it("deletes the file, confirms to the socket, and broadcasts a fresh list", async () => {
+    const { io, socket, pi } = setup();
+    socket.emit("chat:delete", { sessionFile: "/tmp/s1.jsonl" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(pi.deletePersistedSession).toHaveBeenCalledWith("/tmp/s1.jsonl");
+    expect(socket.emitSpy.mock.calls.map((c) => c[0])).toContain("chat:deleted");
+    // The refreshed list is broadcast to everyone, not just the requester.
+    expect(io.emitSpy.mock.calls.map((c) => c[0])).toContain("chat:sessions");
+  });
+
+  it("rejects an empty sessionFile without touching disk", async () => {
+    const { socket, pi } = setup();
+    socket.emit("chat:delete", { sessionFile: "  " });
+    await new Promise((r) => setImmediate(r));
+
+    expect(pi.deletePersistedSession).not.toHaveBeenCalled();
+    expect(socket.emitSpy.mock.calls.map((c) => c[0])).toContain("chat:error");
+  });
+});
+
 describe("chat:state", () => {
   it("returns a snapshot of the current session", async () => {
     const { socket } = setup();
@@ -257,15 +281,75 @@ describe("chat:state", () => {
     expect(payload.state?.thinkingLevel).toBe("off");
   });
 
-  it("returns state=null when no session is registered", async () => {
+  it("returns state=null when no session is registered and none are persisted", async () => {
     const pi = makePiStub();
     pi.getSession = vi.fn(() => undefined) as unknown as typeof pi.getSession;
+    pi.listPersistedSessions = vi.fn(async () => []) as unknown as typeof pi.listPersistedSessions;
     const { socket } = setup(pi);
     socket.emit("chat:state", { sessionId: "missing" });
     await new Promise((r) => setImmediate(r));
 
     const stateEmit = socket.emitSpy.mock.calls.find((c) => c[0] === "chat:state:result");
     expect((stateEmit![1] as { state: unknown }).state).toBeNull();
+    expect(pi.getOrCreateSession).not.toHaveBeenCalled();
+  });
+
+  it("restores the client's SPECIFIC session by sessionFile on reconnect (multi-session)", async () => {
+    const session = makeSessionStub({
+      messages: [{ role: "user", content: "session B message", timestamp: 1 }],
+    });
+    const pi = makePiStub(session);
+    let inMemory = false;
+    pi.getSession = vi.fn(() =>
+      inMemory ? session : undefined,
+    ) as unknown as typeof pi.getSession;
+    pi.getOrCreateSession = vi.fn(async () => {
+      inMemory = true;
+      return session;
+    }) as unknown as typeof pi.getOrCreateSession;
+
+    const { socket } = setup(pi);
+    socket.emit("chat:state", { sessionId: "tab-2", sessionFile: "/tmp/sessionB.jsonl" });
+    await new Promise((r) => setImmediate(r));
+
+    // Resumes the exact file — NOT continueRecent (which would hand every
+    // client the same "most recent" conversation).
+    expect(pi.getOrCreateSession).toHaveBeenCalledWith("tab-2", {
+      sessionFile: "/tmp/sessionB.jsonl",
+    });
+    expect(pi.listPersistedSessions).not.toHaveBeenCalled();
+    const stateEmit = socket.emitSpy.mock.calls.find((c) => c[0] === "chat:state:result");
+    expect(
+      (stateEmit![1] as { state: { messages: unknown[] } | null }).state?.messages,
+    ).toHaveLength(1);
+  });
+
+  it("auto-restores the most recent persisted session on reconnect after a restart", async () => {
+    // Simulate a fresh server process: the session isn't in memory yet, but a
+    // persisted session exists on disk. The handler should reopen the most
+    // recent one (continueRecent) and return its history.
+    const session = makeSessionStub({
+      messages: [{ role: "user", content: "earlier message", timestamp: 1 }],
+    });
+    const pi = makePiStub(session);
+    let inMemory = false;
+    pi.getSession = vi.fn(() =>
+      inMemory ? session : undefined,
+    ) as unknown as typeof pi.getSession;
+    pi.getOrCreateSession = vi.fn(async () => {
+      inMemory = true; // restored into the in-memory map
+      return session;
+    }) as unknown as typeof pi.getOrCreateSession;
+
+    const { socket } = setup(pi);
+    socket.emit("chat:state", { sessionId: "default" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(pi.getOrCreateSession).toHaveBeenCalledWith("default", { continueRecent: true });
+    const stateEmit = socket.emitSpy.mock.calls.find((c) => c[0] === "chat:state:result");
+    const payload = stateEmit![1] as { state: { messages: unknown[] } | null };
+    expect(payload.state).not.toBeNull();
+    expect(payload.state!.messages).toHaveLength(1);
   });
 });
 
@@ -290,6 +374,28 @@ describe("session:setThinkingLevel", () => {
     expect(pi.setSessionThinkingLevel).toHaveBeenCalledWith("default", "high");
     const events = io.emitSpy.mock.calls.map((c) => c[0]);
     expect(events).toContain("session:thinkingLevelChanged");
+  });
+});
+
+describe("session:setName", () => {
+  it("renames the session and broadcasts session:nameChanged", async () => {
+    const { io, socket, pi } = setup();
+    socket.emit("session:setName", { sessionId: "default", name: "My feature work" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(pi.setSessionName).toHaveBeenCalledWith("default", "My feature work");
+    const events = io.emitSpy.mock.calls.map((c) => c[0]);
+    expect(events).toContain("session:nameChanged");
+  });
+
+  it("rejects an empty name with session:error and does not rename", async () => {
+    const { socket, pi } = setup();
+    socket.emit("session:setName", { sessionId: "default", name: "   " });
+    await new Promise((r) => setImmediate(r));
+
+    expect(pi.setSessionName).not.toHaveBeenCalled();
+    const events = socket.emitSpy.mock.calls.map((c) => c[0]);
+    expect(events).toContain("session:error");
   });
 });
 

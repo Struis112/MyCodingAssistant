@@ -145,12 +145,34 @@ export function Composer() {
   );
 
   const handleSend = useCallback(() => {
-    if (!input.trim() && pendingFiles.length === 0) return;
+    const trimmed = input.trim();
+
+    // Slash command: `/name <new name>` renames the session (updates the chat
+    // header, the browser tab, and the persisted session name). Handled
+    // locally instead of being sent to the model.
+    if (trimmed.toLowerCase() === "/name" || trimmed.toLowerCase().startsWith("/name ")) {
+      const name = trimmed.slice("/name".length).trim();
+      if (!name) {
+        addItem({
+          kind: "system",
+          id: generateId(),
+          text: "Usage: /name <session name>",
+          timestamp: Date.now(),
+        });
+      } else {
+        getSocket().emit("session:setName", { sessionId, name });
+      }
+      setInput("");
+      inputRef.current?.focus();
+      return;
+    }
+
+    if (!trimmed && pendingFiles.length === 0) return;
     sendMessage(input, pendingFiles);
     setInput("");
     setPendingFiles([]);
     inputRef.current?.focus();
-  }, [input, pendingFiles, sendMessage]);
+  }, [input, pendingFiles, sendMessage, addItem, sessionId]);
 
   // Right-click the send/queue button to instantly send "Continue" without
   // clobbering whatever is currently in the textarea.
@@ -176,10 +198,7 @@ export function Composer() {
 
   return (
     <div
-      className={cn(
-        "relative border-t p-4 shrink-0 transition-colors",
-        isDragging ? "border-primary bg-primary/5" : "border-border",
-      )}
+      className={cn("relative p-2 shrink-0 transition-colors", isDragging && "bg-primary/5")}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -192,83 +211,86 @@ export function Composer() {
         </div>
       )}
 
-      {/* Pending-attachments row */}
-      {pendingFiles.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {pendingFiles.map((f) => (
-            <PendingFileChip key={f.id} file={f} onRemove={() => removeFile(f.id)} />
-          ))}
-        </div>
-      )}
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="sr-only"
-        onChange={onFilePickerChange}
-        aria-hidden="true"
-        tabIndex={-1}
-      />
-
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="px-3 py-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-          aria-label="Attach files"
-          title="Attach files (or drag files into this area)"
-        >
-          <Paperclip className="w-5 h-5" />
-        </button>
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            isStreaming
-              ? "Queue a message... (Enter to steer, Shift+Enter for newline)"
-              : "Type your message... (Enter to send, Shift+Enter for newline)"
-          }
-          className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none min-h-[44px] max-h-[200px] transition-colors"
-          rows={1}
-          aria-label="Message input"
-        />
-        {isStreaming && (
-          <button
-            onClick={handleAbort}
-            className="px-4 py-2 bg-error/20 text-error rounded-lg hover:bg-error/30 transition-colors"
-            aria-label="Stop streaming"
-            title="Stop the current response"
-          >
-            <Square className="w-5 h-5" />
-          </button>
+      {/* Constrain to the same centered column as the message list (see .chat-column). */}
+      <div className="chat-column">
+        {/* Pending-attachments row */}
+        {pendingFiles.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pendingFiles.map((f) => (
+              <PendingFileChip key={f.id} file={f} onRemove={() => removeFile(f.id)} />
+            ))}
+          </div>
         )}
-        <button
-          onClick={handleSend}
-          onContextMenu={handleQuickContinue}
-          // Use aria-disabled rather than the native `disabled` attribute: a
-          // disabled button swallows every mouse event (including
-          // contextmenu), which would break the right-click “Continue”
-          // shortcut when the textarea is empty. handleSend itself no-ops on an
-          // empty draft, so left-click stays safe.
-          aria-disabled={!input.trim() && pendingFiles.length === 0}
-          className={cn(
-            "px-4 py-2 bg-primary text-primary-foreground rounded-lg transition-colors",
-            !input.trim() && pendingFiles.length === 0
-              ? "opacity-50 cursor-not-allowed"
-              : "hover:bg-primary/90",
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          onChange={onFilePickerChange}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-2 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+            aria-label="Attach files"
+            title="Attach files (or drag files into this area)"
+          >
+            <Paperclip className="w-4 h-4" />
+          </button>
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              isStreaming
+                ? "Queue a message... (Enter to steer, Shift+Enter for newline)"
+                : "Type your message... (Enter to send, Shift+Enter for newline)"
+            }
+            className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary resize-none min-h-[36px] max-h-[160px] transition-colors"
+            rows={1}
+            aria-label="Message input"
+          />
+          {isStreaming && (
+            <button
+              onClick={handleAbort}
+              className="px-3 py-1.5 bg-error/20 text-error rounded-lg hover:bg-error/30 transition-colors"
+              aria-label="Stop streaming"
+              title="Stop the current response"
+            >
+              <Square className="w-4 h-4" />
+            </button>
           )}
-          aria-label={isStreaming ? "Queue message" : "Send message"}
-          title={
-            isStreaming
-              ? "Queue this message — delivered after the current assistant turn (right-click to send “Continue”)"
-              : "Send message (right-click to send “Continue”)"
-          }
-        >
-          <Send className="w-5 h-5" />
-        </button>
+          <button
+            onClick={handleSend}
+            onContextMenu={handleQuickContinue}
+            // Use aria-disabled rather than the native `disabled` attribute: a
+            // disabled button swallows every mouse event (including
+            // contextmenu), which would break the right-click “Continue”
+            // shortcut when the textarea is empty. handleSend itself no-ops on an
+            // empty draft, so left-click stays safe.
+            aria-disabled={!input.trim() && pendingFiles.length === 0}
+            className={cn(
+              "px-3 py-1.5 bg-primary text-primary-foreground rounded-lg transition-colors",
+              !input.trim() && pendingFiles.length === 0
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:bg-primary/90",
+            )}
+            aria-label={isStreaming ? "Queue message" : "Send message"}
+            title={
+              isStreaming
+                ? "Queue this message — delivered after the current assistant turn (right-click to send “Continue”)"
+                : "Send message (right-click to send “Continue”)"
+            }
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

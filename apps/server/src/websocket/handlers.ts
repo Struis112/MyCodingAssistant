@@ -227,6 +227,7 @@ export function registerWebSocketHandlers(
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
+          name: session.sessionName ?? null,
         });
       } catch (err) {
         io.to(room).emit("chat:error", { sessionId: data.sessionId, error: String(err) });
@@ -245,6 +246,7 @@ export function registerWebSocketHandlers(
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
+          name: session.sessionName ?? null,
           messages: session.messages,
         });
       } catch (err) {
@@ -261,12 +263,64 @@ export function registerWebSocketHandlers(
       }
     });
 
-    socket.on("chat:state", (data: { sessionId: string }) => {
+    socket.on("chat:delete", async (data: { sessionFile: string }) => {
+      const sessionFile = (data?.sessionFile ?? "").trim();
+      if (!sessionFile) {
+        socket.emit("chat:error", { sessionId: "", error: "sessionFile is required." });
+        return;
+      }
+      try {
+        await piSessionManager.deletePersistedSession(sessionFile);
+        // Confirm to the requester, then broadcast the refreshed list so every
+        // open Sessions view drops the deleted row.
+        socket.emit("chat:deleted", { sessionFile });
+        const sessions = await piSessionManager.listPersistedSessions();
+        io.emit("chat:sessions", sessions);
+        console.log(`[WS] Session deleted: ${sessionFile}`);
+      } catch (err) {
+        socket.emit("chat:error", { sessionId: "", error: String(err) });
+      }
+    });
+
+    socket.on("chat:state", async (data: { sessionId: string; sessionFile?: string }) => {
       // Joining on chat:state covers the reload case: the browser asks for
       // current state on every (re)connect, which is also the right moment
       // to (re)subscribe to its session's events.
       joinSession(socket, data.sessionId);
-      const session = piSessionManager.getSession(data.sessionId);
+      let session = piSessionManager.getSession(data.sessionId);
+
+      // Auto-reconnect after a server restart. A fresh process has an empty
+      // in-memory session map, so a reconnecting client would otherwise get an
+      // empty chat even though the conversation is persisted on disk.
+      if (!session) {
+        try {
+          if (data.sessionFile) {
+            // Multi-session correct: restore THIS client's specific session by
+            // file. With many concurrent sessions, "most recent" would hand
+            // every client the same conversation — resuming the known file
+            // keeps them isolated and accurate.
+            await piSessionManager.getOrCreateSession(data.sessionId, {
+              sessionFile: data.sessionFile,
+            });
+            session = piSessionManager.getSession(data.sessionId);
+          } else {
+            // No remembered file (e.g. first run): fall back to the most recent
+            // persisted session for this cwd.
+            const persisted = await piSessionManager.listPersistedSessions();
+            if (persisted.length > 0) {
+              await piSessionManager.getOrCreateSession(data.sessionId, { continueRecent: true });
+              session = piSessionManager.getSession(data.sessionId);
+            }
+          }
+          if (session) {
+            attachEventForwarder(io, piSessionManager, data.sessionId);
+            console.log(`[WS] restored session on reconnect sid=${data.sessionId}`);
+          }
+        } catch (err) {
+          console.error(`[WS] chat:state restore failed sid=${data.sessionId}:`, err);
+        }
+      }
+
       if (!session) {
         socket.emit("chat:state:result", { sessionId: data.sessionId, state: null });
         return;
@@ -276,6 +330,7 @@ export function registerWebSocketHandlers(
         state: {
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
+          name: session.sessionName ?? null,
           model: session.model
             ? {
                 id: session.model.id,
@@ -311,6 +366,24 @@ export function registerWebSocketHandlers(
         }
       },
     );
+
+    socket.on("session:setName", async (data: { sessionId: string; name: string }) => {
+      joinSession(socket, data.sessionId);
+      const room = roomFor(data.sessionId);
+      const name = (data.name ?? "").trim();
+      if (!name) {
+        socket.emit("session:error", { error: "Session name cannot be empty." });
+        return;
+      }
+      try {
+        await piSessionManager.getOrCreateSession(data.sessionId);
+        const resolved = piSessionManager.setSessionName(data.sessionId, name);
+        io.to(room).emit("session:nameChanged", { sessionId: data.sessionId, name: resolved });
+        console.log(`[WS] Session named: ${data.sessionId} -> ${resolved}`);
+      } catch (err) {
+        socket.emit("session:error", { error: String(err) });
+      }
+    });
 
     socket.on(
       "session:setThinkingLevel",
