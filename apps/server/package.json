@@ -30,7 +30,7 @@
     "@vitest/coverage-v8": "^4.1.0",
     "eslint": "^9.15.0",
     "supertest": "^7.2.2",
-    "tsx": "^4.19.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.4.5",
     "vitest": "^4.1.0"
   }
