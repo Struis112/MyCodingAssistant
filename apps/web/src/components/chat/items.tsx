@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Markdown } from "@/components/Markdown";
 import type { ChatItem, ContentBlock } from "@/lib/store";
 import { cn, formatTimestamp } from "@/lib/utils";
@@ -58,7 +58,7 @@ function RoleBadge({
 // Dispatcher
 // =============================================================================
 
-export function ItemView({ item, filters }: { item: ChatItem; filters: MessageFilters }) {
+function ItemViewBase({ item, filters }: { item: ChatItem; filters: MessageFilters }) {
   switch (item.kind) {
     case "user":
       return <UserItem item={item} />;
@@ -145,7 +145,15 @@ function TextBlock({ block }: { block: Extract<ContentBlock, { type: "text" }> }
   const cursorBg = accentClasses(ASSISTANT_BLOCK_STYLES.text.accent).rail.replace("border-", "bg-");
   return (
     <div className="break-words">
-      <Markdown>{block.text}</Markdown>
+      {block.isStreaming ? (
+        // While streaming, render PLAIN text. Parsing markdown + running
+        // highlight.js language auto-detection on every token (over the whole
+        // growing message) is what made long responses crawl. It formats once
+        // the block finishes — completed blocks are memoized, so they parse once.
+        <div className="whitespace-pre-wrap text-sm leading-relaxed">{block.text}</div>
+      ) : (
+        <Markdown>{block.text}</Markdown>
+      )}
       {block.isStreaming && (
         <span
           className={cn("inline-block w-[2px] h-4 align-text-bottom cursor-blink ml-0.5", cursorBg)}
@@ -350,3 +358,8 @@ function SystemItem({ item }: { item: Extract<ChatItem, { kind: "system" }> }) {
     </div>
   );
 }
+
+// Memoized: only the message that actually changed (e.g. the streaming
+// assistant item, whose object reference updates each token) re-renders —
+// not the whole list. This is the big win for streaming responsiveness.
+export const ItemView = memo(ItemViewBase);

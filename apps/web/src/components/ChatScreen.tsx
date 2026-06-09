@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useShallow } from "zustand/react/shallow";
@@ -31,8 +31,14 @@ import type { MessageFilters } from "@/components/chat/types";
 // none (avoids needless re-renders under useShallow).
 const EMPTY_ITEMS: never[] = [];
 
+// Windowing: render only the most recent messages for speed on long chats;
+// scrolling to the top loads older ones in batches. A small initial window
+// makes opening a long conversation instant; tweak freely.
+const INITIAL_WINDOW = 150;
+const WINDOW_STEP = 500;
+
 export function ChatScreen() {
-  const { items, sessionFile, sessionName, isStreaming } = useAppStore(
+  const { items, sessionFile, sessionName, isStreaming, activeSessionId } = useAppStore(
     useShallow((s) => {
       const a = s.sessions[s.activeSessionId];
       return {
@@ -40,6 +46,7 @@ export function ChatScreen() {
         sessionFile: a?.sessionFile,
         sessionName: a?.name ?? null,
         isStreaming: a?.isStreaming ?? false,
+        activeSessionId: s.activeSessionId,
       };
     }),
   );
@@ -53,7 +60,13 @@ export function ChatScreen() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  const scrollRafRef = useRef<number | null>(null);
   const [atBottom, setAtBottom] = useState(true);
+  // How many of the most-recent messages to render (windowing for speed).
+  const [windowSize, setWindowSize] = useState(INITIAL_WINDOW);
+  // Captured before loading older messages so the scroll stays anchored once
+  // the taller list renders.
+  const pendingPrependRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
 
   // Subscribe to socket events. The hook handles all add/update/clear calls
   // against the store so we don't need to thread callbacks here.
@@ -61,20 +74,37 @@ export function ChatScreen() {
 
   // Track whether the view is pinned to the bottom so we only auto-scroll when
   // the user hasn't scrolled up to read earlier messages.
+  // Visible window: filter ONLY the last `windowSize` messages (not the whole
+  // history) so this stays cheap per streaming token even on long chats.
+  const visibleItems = useMemo(() => {
+    const windowed = items.length > windowSize ? items.slice(-windowSize) : items;
+    return windowed.filter((item) => isItemVisible(item, filters));
+  }, [items, windowSize, filters]);
+  const hiddenCount = Math.max(0, items.length - windowSize);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = near;
     setAtBottom(near);
+    // Near the top with older messages hidden → load the next batch.
+    if (el.scrollTop < 120 && hiddenCount > 0 && !pendingPrependRef.current) {
+      pendingPrependRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+      setWindowSize((w) => w + WINDOW_STEP);
+    }
   };
 
   // Auto-scroll on new content ONLY when already near the bottom. Instant while
   // streaming (smooth lags behind token bursts); smooth for one-off additions.
   useEffect(() => {
-    if (atBottomRef.current) {
+    if (!atBottomRef.current) return;
+    // Coalesce token-by-token scrolls into one per frame (avoids layout thrash).
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
       messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
-    }
+    });
   }, [items, isStreaming]);
 
   const jumpToLatest = () => {
@@ -82,6 +112,21 @@ export function ChatScreen() {
     atBottomRef.current = true;
     setAtBottom(true);
   };
+
+  // Switching tabs/sessions resets the window to the most recent messages.
+  useEffect(() => {
+    setWindowSize(INITIAL_WINDOW);
+  }, [activeSessionId]);
+
+  // After loading older messages, keep the viewport anchored (no jump to top).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const p = pendingPrependRef.current;
+    if (el && p) {
+      el.scrollTop = p.prevTop + (el.scrollHeight - p.prevHeight);
+      pendingPrependRef.current = null;
+    }
+  }, [windowSize]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -110,11 +155,15 @@ export function ChatScreen() {
           ) : (
             /* Center the conversation in the shared chat column (see .chat-column). */
             <div className="chat-column space-y-3">
-              {items
-                .filter((item) => isItemVisible(item, filters))
-                .map((item) => (
-                  <ItemView key={item.id} item={item} filters={filters} />
-                ))}
+              {hiddenCount > 0 && (
+                <div className="text-center py-2 text-xs text-muted-foreground select-none">
+                  Showing the latest {visibleItems.length} messages · scroll up to load{" "}
+                  {Math.min(WINDOW_STEP, hiddenCount)} older
+                </div>
+              )}
+              {visibleItems.map((item) => (
+                <ItemView key={item.id} item={item} filters={filters} />
+              ))}
               <div ref={messagesEndRef} />
             </div>
           )}
