@@ -10,6 +10,13 @@ export const metadata: Metadata = {
   description: "Self-learning AI coding assistant",
 };
 
+// The root layout reads cookies() (theme + font), so every route is rendered
+// per-request anyway. Declaring the segment dynamic stops Next from trying to
+// statically prerender the built-in /404 page — which, combined with cookies()
+// in the layout, fails the production build with a misleading
+// "<Html> should not be imported outside of pages/_document" error.
+export const dynamic = "force-dynamic";
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Resolve the theme on the server from a cookie. When present, we render the
   // matching class on <html> directly, so the markup is fully deterministic —

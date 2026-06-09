@@ -1,0 +1,1 @@
+Get-Service | Where-Object { $_.Name -like '*mca*' -or $_.Name -like '*MCA*' -or $_.DisplayName -like '*Coding*' -or $_.DisplayName -like '*Assistant*' } | Format-Table Name, Status, DisplayName -AutoSize
