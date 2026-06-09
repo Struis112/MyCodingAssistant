@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  ArrowDown,
   FileText,
   Image as ImageIcon,
   Paperclip,
@@ -27,8 +28,20 @@ import {
  * send / abort buttons. Pushes user messages to the store and emits
  * `chat:send` / `chat:abort` over the socket.
  */
-export function Composer() {
-  const { addItem, isStreaming, setIsStreaming, sessionId } = useAppStore();
+export function Composer({
+  atBottom,
+  onScrollToBottom,
+}: {
+  atBottom: boolean;
+  onScrollToBottom: () => void;
+}) {
+  // Selective subscriptions: the composer should not re-render on every
+  // streaming token (which mutates `items`), only when these slices change.
+  const addItem = useAppStore((s) => s.addItem);
+  const setStreaming = useAppStore((s) => s.setStreaming);
+  const sessionId = useAppStore((s) => s.activeSessionId);
+  const isStreaming = useAppStore((s) => s.sessions[s.activeSessionId]?.isStreaming ?? false);
+  const sessionFile = useAppStore((s) => s.sessions[s.activeSessionId]?.sessionFile);
 
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -37,6 +50,33 @@ export function Composer() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
+
+  // Auto-grow the textarea to fit its content, up to the max height (then it
+  // scrolls internally). Keeps multi-line drafts fully visible.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
+
+  // Global shortcut: "/" (when not already typing in a field) or Ctrl/Cmd+K
+  // focuses the composer. Esc to blur is handled on the textarea itself.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      const cmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
+      const slash = e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey;
+      if (cmdK || slash) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // ----- File ingestion -----
 
@@ -51,7 +91,7 @@ export function Composer() {
       const rejected = processed.filter((f) => f.kind === "unsupported");
       const accepted = processed.filter((f) => f.kind !== "unsupported");
       for (const r of rejected) {
-        addItem({
+        addItem(sessionId, {
           kind: "system",
           id: generateId(),
           text: `Skipped attachment "${r.name}": ${r.rejection}`,
@@ -62,7 +102,7 @@ export function Composer() {
         setPendingFiles((prev) => [...prev, ...accepted]);
       }
     },
-    [addItem],
+    [addItem, sessionId],
   );
 
   const removeFile = useCallback((id: string) => {
@@ -133,15 +173,23 @@ export function Composer() {
         ? `${trimmed}${trimmed ? "\n\n" : ""}📎 ${files.length} attachment${files.length > 1 ? "s" : ""}:\n${attachmentSummary}`
         : trimmed;
 
-      addItem({ kind: "user", id: generateId(), text: displayText, timestamp: Date.now() });
-      if (!isStreaming) setIsStreaming(true);
+      addItem(sessionId, {
+        kind: "user",
+        id: generateId(),
+        text: displayText,
+        timestamp: Date.now(),
+      });
+      if (!isStreaming) setStreaming(sessionId, true);
       getSocket().emit("chat:send", {
         sessionId,
+        // Send the remembered file so the server restores THIS conversation
+        // (not an empty one) if it was sent after a restart.
+        sessionFile,
         message: messageToSend,
         images: images.length > 0 ? images : undefined,
       });
     },
-    [isStreaming, sessionId, addItem, setIsStreaming],
+    [isStreaming, sessionId, sessionFile, addItem, setStreaming],
   );
 
   const handleSend = useCallback(() => {
@@ -153,7 +201,7 @@ export function Composer() {
     if (trimmed.toLowerCase() === "/name" || trimmed.toLowerCase().startsWith("/name ")) {
       const name = trimmed.slice("/name".length).trim();
       if (!name) {
-        addItem({
+        addItem(sessionId, {
           kind: "system",
           id: generateId(),
           text: "Usage: /name <session name>",
@@ -186,10 +234,14 @@ export function Composer() {
 
   const handleAbort = useCallback(() => {
     getSocket().emit("chat:abort", { sessionId });
-    setIsStreaming(false);
-  }, [sessionId, setIsStreaming]);
+    setStreaming(sessionId, false);
+  }, [sessionId, setStreaming]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      inputRef.current?.blur();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -256,6 +308,17 @@ export function Composer() {
             rows={1}
             aria-label="Message input"
           />
+          {!atBottom && (
+            <button
+              type="button"
+              onClick={onScrollToBottom}
+              className="px-2 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+              aria-label="Scroll to latest message"
+              title="Scroll to the latest message"
+            >
+              <ArrowDown className="w-4 h-4" />
+            </button>
+          )}
           {isStreaming && (
             <button
               onClick={handleAbort}

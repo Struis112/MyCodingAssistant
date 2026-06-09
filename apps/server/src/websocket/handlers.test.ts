@@ -141,6 +141,35 @@ describe("chat:send (idle)", () => {
     expect(ioEmits).toContain("chat:done");
   });
 
+  it("restores the session by sessionFile before prompting (continues after a restart)", async () => {
+    const session = makeSessionStub();
+    const pi = makePiStub(session);
+    let inMemory = false; // simulate a fresh server: not in the in-memory map yet
+    pi.getSession = vi.fn(() =>
+      inMemory ? session : undefined,
+    ) as unknown as typeof pi.getSession;
+    pi.getOrCreateSession = vi.fn(async () => {
+      inMemory = true;
+      return session;
+    }) as unknown as typeof pi.getOrCreateSession;
+
+    const { socket } = setup(pi);
+    socket.emit("chat:send", {
+      sessionId: "default",
+      message: "continue please",
+      sessionFile: "/tmp/sessionA.jsonl",
+    });
+    await new Promise((r) => setImmediate(r));
+
+    // Restored THIS conversation by file (not a fresh empty session)...
+    expect(pi.getOrCreateSession).toHaveBeenCalledWith("default", {
+      sessionFile: "/tmp/sessionA.jsonl",
+    });
+    // ...then prompted it, and told the client its canonical file to persist.
+    expect(session.prompt).toHaveBeenCalledWith("continue please", undefined);
+    expect(socket.emitSpy.mock.calls.some((c) => c[0] === "session:info")).toBe(true);
+  });
+
   it("forwards image attachments to session.prompt as ImageContent", async () => {
     const { socket, pi } = setup();
     socket.emit("chat:send", {

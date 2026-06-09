@@ -4,6 +4,8 @@
 // Opencode Go) register themselves the same way.
 
 import express from "express";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
@@ -12,6 +14,13 @@ import { fileURLToPath } from "node:url";
 import { ConnectorRegistry } from "./connectors/registry.js";
 import { createPiConnector } from "./connectors/pi/index.js";
 import { ServiceRegistry, createWebService } from "./services/service-registry.js";
+import { HealthWatchdog } from "./services/health-watchdog.js";
+import {
+  appParametersFor,
+  buildTargetFor,
+  currentRunMode,
+  type RunMode,
+} from "./services/run-mode.js";
 import type { ServiceStatus } from "./services/service-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
@@ -40,14 +49,19 @@ const PROJECT_ROOT = process.env.MCA_PROJECT_ROOT
 
 const PORT = parseInt(process.env.PORT || "7641", 10);
 const HOST = process.env.HOST || "0.0.0.0";
-// Allow the frontend origin to be overridden via env so devs running the web
-// app on a non-default port (e.g. when 7642 is already taken) don't get
-// CORS errors. Default mirrors the web `next dev -p 7642`.
-const WEB_ORIGIN = process.env.MCA_WEB_ORIGIN || "http://localhost:7642";
+// CORS: by default REFLECT the request origin so the app works whether you open
+// it on localhost OR over the LAN (http://<lan-ip>:7642). This is a local,
+// single-user tool on a trusted network, so reflecting is the pragmatic choice.
+// NOTE: we intentionally do NOT use MCA_WEB_ORIGIN here — the installer sets it
+// to http://localhost:7642, which would (wrongly) lock out LAN devices. To
+// restrict CORS explicitly, set MCA_CORS_ORIGIN (comma-separated origins).
+const corsOrigin: cors.CorsOptions["origin"] = process.env.MCA_CORS_ORIGIN
+  ? process.env.MCA_CORS_ORIGIN.split(",").map((s) => s.trim())
+  : true;
 
 // Express app
 const app = express();
-app.use(cors({ origin: WEB_ORIGIN }));
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 // HTTP server
@@ -56,8 +70,14 @@ const httpServer = createServer(app);
 // WebSocket server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: WEB_ORIGIN,
+    origin: corsOrigin,
     methods: ["GET", "POST"],
+  },
+  // Make brief outages (e.g. a deploy restart) transparent: socket.io restores
+  // the client's session and replays events missed during the disconnect window.
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true,
   },
 });
 
@@ -122,6 +142,138 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// ----- Account usage (Anthropic 5-hour + weekly limits) -----
+// The upstream endpoint is tightly rate-limited (empirically ~3 requests per
+// rolling 5-minute window; a 429 returns `retry-after: 300`). So we:
+//   - cache the last GOOD value and serve it through any failure (the header
+//     never flips to "—" on a transient blip), and
+//   - only re-fetch after a long TTL, and back off for `retry-after` on a 429.
+// Net upstream rate: at most ~1 request / 5 min — comfortably under the limit.
+let usageCache: {
+  at: number;
+  data: { fiveHourPct: number | null; weeklyPct: number | null };
+} | null = null;
+let usageCooldownUntil = 0;
+const USAGE_TTL_MS = 5 * 60_000;
+app.get("/api/usage", async (req, res) => {
+  const debug = req.query.debug === "1";
+  if (!piSessionManager.getAccountUsage) {
+    res.json({ fiveHourPct: null, weeklyPct: null });
+    return;
+  }
+  if (debug) {
+    res.json(await piSessionManager.getAccountUsage({ debug: true }));
+    return;
+  }
+  const now = Date.now();
+  // Serve the cached value while it's fresh OR while we're backing off a 429.
+  if (usageCache && (now - usageCache.at < USAGE_TTL_MS || now < usageCooldownUntil)) {
+    res.json(usageCache.data);
+    return;
+  }
+  try {
+    const data = await piSessionManager.getAccountUsage();
+    if (data.rateLimited) {
+      usageCooldownUntil = now + (data.retryAfterMs ?? 5 * 60_000);
+      res.json(usageCache?.data ?? data);
+      return;
+    }
+    const fresh = data.fiveHourPct !== null || data.weeklyPct !== null;
+    if (fresh) {
+      usageCache = { at: now, data };
+      res.json(data);
+    } else {
+      res.json(usageCache?.data ?? data);
+    }
+  } catch (err) {
+    if (usageCache) res.json(usageCache.data);
+    else res.json({ fiveHourPct: null, weeklyPct: null, error: String(err) });
+  }
+});
+
+// ----- Run mode (dev/HMR ↔ prod build) -----
+// Switching only rewrites the NSSM AppParameters (which entry the service runs)
+// and bounces the service; each entry sets its own env. Requires the bundled
+// NSSM and that the service runs as the repo owner (Administrator).
+const SERVICE_NAME = process.env.MCA_SERVICE_NAME || "MyCodingAssistant";
+const NSSM_PATH = path.join(PROJECT_ROOT, "tools", "nssm", "nssm.exe");
+
+function runCmd(
+  cmd: string,
+  args: string[],
+  useShell: boolean,
+): Promise<{ ok: boolean; logs: string }> {
+  return new Promise((resolve) => {
+    let out = "";
+    const proc = spawn(cmd, args, { cwd: PROJECT_ROOT, shell: useShell });
+    proc.stdout?.on("data", (d) => (out += d.toString()));
+    proc.stderr?.on("data", (d) => (out += d.toString()));
+    proc.on("exit", (code) => resolve({ ok: code === 0, logs: out }));
+    proc.on("error", (err) => resolve({ ok: false, logs: String(err) }));
+  });
+}
+
+app.get("/api/runmode", (_req, res) => {
+  res.json({ mode: currentRunMode(), canSwitch: existsSync(NSSM_PATH) });
+});
+
+app.post("/api/runmode", async (req, res) => {
+  const mode = req.body?.mode as RunMode;
+  if (mode !== "dev" && mode !== "hybrid" && mode !== "prod") {
+    res.status(400).json({ ok: false, error: "mode must be 'dev', 'hybrid', or 'prod'" });
+    return;
+  }
+  if (!existsSync(NSSM_PATH)) {
+    res.status(400).json({ ok: false, error: "This service isn't managed by the bundled NSSM." });
+    return;
+  }
+  if (mode === currentRunMode()) {
+    res.json({ ok: true, mode, restarting: false, note: "already in this mode" });
+    return;
+  }
+  try {
+    // Built entries need an up-to-date build first: hybrid runs the built server
+    // (server-only build), prod runs the built server + web (full build), dev
+    // runs from source (no build).
+    const target = buildTargetFor(mode);
+    if (target !== "none") {
+      const args =
+        target === "full" ? ["run", "build"] : ["run", "build", "--workspace=@mca/server"];
+      console.log(`[runmode] building (${target}) for ${mode}…`);
+      const built = await runCmd("npm", args, process.platform === "win32");
+      if (!built.ok) {
+        res.status(500).json({ ok: false, error: `build failed:\n${built.logs.slice(-2000)}` });
+        return;
+      }
+    }
+    const set = await runCmd(
+      NSSM_PATH,
+      ["set", SERVICE_NAME, "AppParameters", appParametersFor(mode, PROJECT_ROOT)],
+      false,
+    );
+    if (!set.ok) {
+      res.status(500).json({ ok: false, error: `nssm set failed:\n${set.logs}` });
+      return;
+    }
+    res.json({ ok: true, mode, restarting: true });
+    // Bounce the service via a DETACHED nssm restart so it survives its own
+    // process tree being killed, and relaunches with the new AppParameters.
+    setTimeout(() => {
+      try {
+        const child = spawn(NSSM_PATH, ["restart", SERVICE_NAME], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+      } catch (err) {
+        console.error("[runmode] restart failed", err);
+      }
+    }, 800);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
 // ----- Services inventory + control -----
 app.get("/api/services", (_req, res) => {
   res.json(services.list());
@@ -167,6 +319,22 @@ app.post("/api/web/restart", async (_req, res) => {
 });
 
 registerApiRoutes(app, piSessionManager, { cwd: PROJECT_ROOT });
+// Auto-reload-on-redeploy: report the current frontend build id on every
+// (re)connect. The client remembers the id it first saw and reloads itself
+// once when a newer one appears (i.e. the web app was redeployed) — so a deploy
+// updates open tabs with no manual refresh. Returns null in dev / before a
+// build, where we don't want to force reloads.
+function getWebBuildId(): string | null {
+  try {
+    return readFileSync(path.join(webDir, ".next", "BUILD_ID"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+io.on("connection", (socket) => {
+  socket.emit("app:version", { buildId: getWebBuildId() });
+});
+
 registerWebSocketHandlers(io, piSessionManager);
 
 // Forward service-status changes to all connected clients so the Services
@@ -174,6 +342,23 @@ registerWebSocketHandlers(io, piSessionManager);
 services.on("status", (list: ServiceStatus[]) => {
   io.emit("services:status", list);
 });
+
+// Health watchdog: when a service has FAILED (its own self-repair already gave
+// up), surface a structured repair request with the logs. This is the hook the
+// AI repair loop consumes ("read the logs, fix it"); for now we log it and emit
+// a signal clients can show. Re-evaluates on every status change + periodically.
+const watchdog = new HealthWatchdog({
+  getStatuses: () => services.list(),
+  getLogs: (name) => services.getLogs(name, 50),
+  onRepairNeeded: (req) => {
+    console.warn(
+      `[watchdog] '${req.service}' is ${req.state} — repair needed (unhealthy since ${new Date(req.since).toISOString()})`,
+    );
+    io.emit("service:repairNeeded", req);
+  },
+});
+services.on("status", () => watchdog.check());
+watchdog.start();
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`[MCA Server] Running on http://${HOST}:${PORT}`);

@@ -24,6 +24,7 @@ describe("CommitTrigger", () => {
   it("fires once per new commit, ignoring unchanged polls", async () => {
     const { trigger, onCommit } = makeTrigger(["A", "A", "B", "B", "C"]);
     const results: boolean[] = [];
+    // eslint-disable-next-line no-await-in-loop
     for (let i = 0; i < 5; i++) results.push(await trigger.checkOnce());
 
     // A=baseline(false), A=unchanged(false), B=fire(true), B=unchanged(false), C=fire(true)
@@ -33,6 +34,7 @@ describe("CommitTrigger", () => {
 
   it("ignores null (unresolved ref) until a real commit appears", async () => {
     const { trigger, onCommit } = makeTrigger([null, null, "A", "B"]);
+    // eslint-disable-next-line no-await-in-loop
     for (let i = 0; i < 4; i++) await trigger.checkOnce();
     // First real sha A is the baseline; B fires.
     expect(onCommit.mock.calls.map((c) => c[0])).toEqual(["B"]);

@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import { SERVER_URL } from "@/lib/api";
 
 export interface Model {
   id: string;
@@ -9,8 +10,6 @@ export interface Model {
   contextWindow?: number;
   reasoning?: boolean;
 }
-
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:7641";
 
 /**
  * Fetch the list of available models with SWR caching. The cache is

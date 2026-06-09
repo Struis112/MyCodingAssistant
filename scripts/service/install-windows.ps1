@@ -12,19 +12,22 @@
 # What this script registers:
 #   binPath = <nssm.exe> -- and NSSM is configured to launch
 #   Application      : node.exe
-#   AppParameters    : apps\server\dist\start-dev-supervised.js  (default)
-#                      apps\server\dist\start-prod.js            (MCA_PROD=1)
+#   AppParameters    : node_modules\tsx\dist\cli.mjs watch
+#                        apps\server\src\start-dev-supervised.ts  (default / watch)
+#                      apps\server\dist\start-prod.js             (MCA_PROD=1)
 #   AppDirectory     : <repo root>
 #   AppEnvironmentExtra : PORT, WEB_PORT, MCA_WEB_ORIGIN, MCA_WEB_DIR,
 #                         MCA_PROJECT_ROOT, MCA_SUPERVISE_WEB=1,
 #                         and per profile: NODE_ENV + (dev) MCA_WEB_DEV=1
 #
-# Profiles:
-#   default (dev)  -- supervised `next dev`: instant fast-refresh, the browser
-#                     auto-reloads on edits. Best for a machine you develop on.
-#   MCA_PROD=1     -- supervised `next start` against the production build:
-#                     optimised bundle, rebuild+restart on change (no in-browser
-#                     auto-refresh). Use for real deployments.
+# Profiles (see README "Run modes"):
+#   default (watch/HMR) -- `tsx watch` (server auto-restart) + `next dev` (web
+#                          Fast Refresh). Edits appear instantly, no rebuild or
+#                          restart. Best for a machine you develop on. Force
+#                          explicitly with MCA_WATCH=1.
+#   MCA_PROD=1          -- `node dist/start-prod.js` (`next start`) against the
+#                          production build: optimised bundle, rebuild+restart on
+#                          change. Use for real deployments.
 #   AppStdout/AppStderr : logs\mca.log (rotated by NSSM)
 #   AppExit Default Restart, throttled
 #
@@ -49,8 +52,10 @@ $ServiceName    = if ($env:MCA_SERVICE_NAME)    { $env:MCA_SERVICE_NAME }    els
 $ServiceDisplay = if ($env:MCA_SERVICE_DISPLAY) { $env:MCA_SERVICE_DISPLAY } else { "MyCodingAssistant" }
 $ApiPort        = if ($env:MCA_PORT)            { $env:MCA_PORT }            else { "7641" }
 $WebPort        = if ($env:MCA_WEB_PORT)        { $env:MCA_WEB_PORT }        else { "7642" }
-# Profile: dev fast-refresh by default; set MCA_PROD=1 for the production build.
-$ProdMode       = ($env:MCA_PROD -eq "1")
+# Profile: watch/HMR by default; set MCA_PROD=1 for the production build.
+# MCA_WATCH=1 selects watch explicitly (it's also the default).
+$ProdMode  = ($env:MCA_PROD -eq "1")
+$WatchMode = (-not $ProdMode)
 
 # ---- Admin check ----
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -61,13 +66,27 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 # ---- Resolve repo + entrypoint (profile-dependent) ----
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
-$EntryFile = if ($ProdMode) { "start-prod.js" } else { "start-dev-supervised.js" }
-$Entry    = Join-Path $RepoRoot "apps\server\dist\$EntryFile"
-if (-not (Test-Path $Entry)) {
-    Write-Error "Cannot find $Entry. Run ``npm run build`` from the repo root first."
-    exit 1
+# Resolve how NSSM launches node, per profile:
+#   watch/HMR: node <tsx cli> watch apps\server\src\start-dev-supervised.ts
+#   prod:      node apps\server\dist\start-prod.js   (needs a prior build)
+if ($ProdMode) {
+    $ProdEntry = Join-Path $RepoRoot "apps\server\dist\start-prod.js"
+    if (-not (Test-Path $ProdEntry)) {
+        Write-Error "Cannot find $ProdEntry. Run ``npm run build`` from the repo root first."
+        exit 1
+    }
+    $AppArgs = """$ProdEntry"""
+} else {
+    $TsxCli   = Join-Path $RepoRoot "node_modules\tsx\dist\cli.mjs"
+    $SrcEntry = Join-Path $RepoRoot "apps\server\src\start-dev-supervised.ts"
+    if (-not (Test-Path $TsxCli)) {
+        Write-Error "Cannot find tsx at $TsxCli. Run ``npm install`` from the repo root first."
+        exit 1
+    }
+    if (-not (Test-Path $SrcEntry)) { Write-Error "Cannot find $SrcEntry."; exit 1 }
+    $AppArgs = """$TsxCli"" watch ""$SrcEntry"""
 }
-Write-Host ("Profile     : " + $(if ($ProdMode) { 'prod (next start)' } else { 'dev (next dev, fast-refresh)' }))
+Write-Host ("Profile     : " + $(if ($ProdMode) { 'prod (next start, built)' } else { 'watch/HMR (tsx watch + next dev)' }))
 
 # ---- Resolve node.exe ----
 $NodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
@@ -168,7 +187,7 @@ Write-Host "Registering service:"
 Write-Host "  Name        : $ServiceName"
 Write-Host "  DisplayName : $ServiceDisplay"
 Write-Host "  App         : $Node"
-Write-Host "  Arguments   : $Entry"
+Write-Host "  Arguments   : $AppArgs"
 Write-Host "  AppDirectory: $RepoRoot"
 Write-Host "  API port    : $ApiPort   (env PORT)"
 Write-Host "  Web port    : $WebPort   (env WEB_PORT, propagated to WebSupervisor)"
@@ -176,9 +195,11 @@ Write-Host "  Stdout log  : $StdoutLog"
 Write-Host "  Stderr log  : $StderrLog"
 Write-Host ""
 
-# install <servicename> <app> [<args>]
-& $Nssm install $ServiceName $Node $Entry | Out-Null
+# install <servicename> <app>; set arguments separately so multi-arg profiles
+# (node <tsx cli> watch <entry>) are stored cleanly.
+& $Nssm install $ServiceName $Node | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Error "nssm install failed (exit $LASTEXITCODE)."; exit 1 }
+& $Nssm set $ServiceName AppParameters $AppArgs | Out-Null
 
 # Friendly metadata in services.msc.
 & $Nssm set $ServiceName DisplayName $ServiceDisplay      | Out-Null

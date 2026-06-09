@@ -40,7 +40,9 @@ module.exports = {
         "system-accent": "rgb(var(--system-accent) / <alpha-value>)",
       },
       fontFamily: {
-        mono: ["JetBrains Mono", "Fira Code", "Consolas", "monospace"],
+        // Driven by the --font-mono CSS variable so the Settings font switch
+        // (Miosevka ↔ JetBrains Mono) re-themes every `font-mono` element too.
+        mono: ["var(--font-mono)", "monospace"],
         sans: [
           "-apple-system",
           "BlinkMacSystemFont",

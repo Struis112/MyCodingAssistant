@@ -8,16 +8,17 @@ import {
   CircleCheck,
   CircleSlash,
   Loader2,
+  Package,
   Play,
   RefreshCw,
   RotateCw,
   Square,
   TriangleAlert,
+  Zap,
 } from "lucide-react";
 import { getSocket } from "@/lib/socket";
+import { SERVER_URL } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:7641";
 
 type ServiceState =
   | "stopped"
@@ -103,6 +104,9 @@ export function ServicesView() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl mx-auto mb-3">
+          <RunModeControl />
+        </div>
         {loading && services.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-60" />
@@ -122,6 +126,175 @@ export function ServicesView() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ----- run mode (dev/HMR ↔ prod) -----
+
+type RunMode = "dev" | "prod";
+
+function ModeButton({
+  label,
+  Icon,
+  active,
+  disabled,
+  busy,
+  onClick,
+}: {
+  label: string;
+  Icon: typeof Zap;
+  active: boolean;
+  disabled: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || active}
+      title={active ? `Currently running in ${label}` : `Switch to ${label}`}
+      className={cn(
+        "flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded border transition-colors",
+        active
+          ? "border-primary/50 text-primary bg-primary/10"
+          : disabled
+            ? "opacity-50 cursor-not-allowed border-border text-muted-foreground"
+            : "border-border text-foreground hover:border-primary/40 hover:text-primary",
+      )}
+    >
+      <Icon className={cn("w-3.5 h-3.5", busy && "animate-spin")} />
+      {label}
+    </button>
+  );
+}
+
+/**
+ * Switch the whole stack between dev/HMR (instant edits) and a production build.
+ * Flipping the mode reconfigures + restarts the NSSM service, so the page will
+ * briefly disconnect (and auto-reload if the web bundle changed).
+ */
+function RunModeControl() {
+  const [mode, setMode] = useState<RunMode | null>(null);
+  const [canSwitch, setCanSwitch] = useState(false);
+  const [busy, setBusy] = useState<RunMode | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`${SERVER_URL}/api/runmode`);
+      if (r.ok) {
+        const d = await r.json();
+        setMode(d.mode);
+        setCanSwitch(!!d.canSwitch);
+      }
+    } catch {
+      /* server unreachable */
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // While a switch is in flight the service restarts; poll until it reports the
+  // target mode, then clear the busy state.
+  useEffect(() => {
+    if (!switching || !busy) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/runmode`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.mode === busy) {
+            setMode(d.mode);
+            setSwitching(false);
+            setBusy(null);
+          }
+        }
+      } catch {
+        /* still restarting */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [switching, busy]);
+
+  const switchTo = useCallback(
+    async (target: RunMode) => {
+      if (target === mode) return;
+      setBusy(target);
+      setError(null);
+      try {
+        const r = await fetch(`${SERVER_URL}/api/runmode`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: target }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.ok === false) {
+          setError(d.error || `Switch failed (${r.status})`);
+          setBusy(null);
+          return;
+        }
+        if (d.restarting) setSwitching(true);
+        else {
+          setBusy(null);
+          load();
+        }
+      } catch (e) {
+        setError(String(e));
+        setBusy(null);
+      }
+    },
+    [mode, load],
+  );
+
+  return (
+    <div className="border border-border rounded-lg bg-card p-3">
+      <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-semibold text-card-foreground">Run mode</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {mode === "dev"
+              ? "Dev / HMR — edits appear instantly (next dev + server auto-restart)."
+              : mode === "prod"
+                ? "Production build — optimized bundle; changes need a rebuild + restart."
+                : "—"}
+          </p>
+        </div>
+        <div className="flex gap-1.5 shrink-0">
+          <ModeButton
+            label="Dev (HMR)"
+            Icon={Zap}
+            active={mode === "dev"}
+            disabled={!canSwitch || !!busy || switching}
+            busy={busy === "dev"}
+            onClick={() => switchTo("dev")}
+          />
+          <ModeButton
+            label="Prod"
+            Icon={Package}
+            active={mode === "prod"}
+            disabled={!canSwitch || !!busy || switching}
+            busy={busy === "prod"}
+            onClick={() => switchTo("prod")}
+          />
+        </div>
+      </div>
+      {switching && (
+        <p className="text-xs text-warning mt-2 flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Switching to {busy === "prod" ? "Prod" : "Dev"}… the service is restarting
+          {busy === "prod" ? " (building first, ~15s)" : ""}.
+        </p>
+      )}
+      {!canSwitch && (
+        <p className="text-xs text-muted-foreground mt-2">
+          Mode switching needs the NSSM-managed service (running as Administrator).
+        </p>
+      )}
+      {error && <p className="text-xs text-error mt-2 break-words">{error}</p>}
     </div>
   );
 }

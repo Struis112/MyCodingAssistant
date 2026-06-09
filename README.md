@@ -49,6 +49,48 @@ npm run lint
 npm test
 ```
 
+## Run modes (when installed as a service)
+
+There are two ways the installed service can run. Switch between them from the
+**Services** screen (a "Run mode" card at the top), or at install time with an
+env var.
+
+### Dev / HMR — for local development (recommended on your own machine)
+
+Instant changes, **no build, restart, or refresh**:
+
+- the web UI runs under **`next dev`** (React Fast Refresh — edits hot-swap in
+  the browser, preserving state);
+- the server runs under **`tsx watch`** (auto-restarts on a source change; the
+  chat reconnects and restores its session automatically).
+
+So when the assistant edits code, it just appears. This is the default profile,
+and the live service can be flipped here without a reinstall.
+
+```powershell
+# install in watch/HMR mode (default)
+powershell -ExecutionPolicy Bypass -File scripts\service\install-windows.ps1
+```
+
+Trade-offs: dev server (slower cold loads, more memory, unminified) and **no
+validated rollback** — a broken edit shows an error overlay/logs instantly and
+you fix forward. Ideal for a single-user local box.
+
+### Prod — for real deployments (serving other people)
+
+Optimised, immutable build: `next start` against `next build`, server from
+`dist`. Changes require a rebuild + restart (automatable via the deploy
+pipeline — see `docs/architecture/self-healing-deploy.md`). No HMR by design.
+
+```powershell
+$env:MCA_PROD = "1"
+powershell -ExecutionPolicy Bypass -File scripts\service\install-windows.ps1
+```
+
+**Rule of thumb:** dev/HMR for your machine, prod for shipping to others. The
+self-healing **deploy pipeline** (validate → activate → rollback → AI repair) is
+a _production_ tool; in dev/HMR you trade that safety for immediacy.
+
 ## Layout
 
 ```

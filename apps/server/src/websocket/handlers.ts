@@ -25,6 +25,18 @@ function roomFor(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
+/** Tell a client the canonical file + name for its session so it can persist
+ *  them and resend the file to restore the exact conversation on reconnect. */
+function emitSessionInfo(socket: Socket, sessionId: string, manager: ConnectorManager): void {
+  const session = manager.getSession(sessionId);
+  if (!session) return;
+  socket.emit("session:info", {
+    sessionId,
+    sessionFile: session.sessionFile,
+    name: session.sessionName ?? null,
+  });
+}
+
 /** Subscribe a socket to a session's room (idempotent in socket.io). */
 function joinSession(socket: Socket, sessionId: string): void {
   try {
@@ -135,8 +147,11 @@ export function registerWebSocketHandlers(
          * Ignored if the agent is idle (message is sent as a fresh prompt).
          */
         behavior?: "steer" | "followUp";
+        /** The client's remembered session file, so we restore the exact
+         *  conversation after a server restart instead of starting empty. */
+        sessionFile?: string;
       }) => {
-        const { sessionId, message, behavior, images } = data;
+        const { sessionId, message, behavior, images, sessionFile } = data;
         const imgCount = images?.length ?? 0;
         console.log(
           `[WS] chat:send sid=${sessionId} len=${message?.length ?? 0} imgs=${imgCount} from=${socket.id}`,
@@ -144,9 +159,21 @@ export function registerWebSocketHandlers(
         joinSession(socket, sessionId);
         const room = roomFor(sessionId);
         try {
-          await piSessionManager.getOrCreateSession(sessionId);
+          // Ensure the session exists. After a server restart the in-memory map
+          // is empty, so restore the client's SPECIFIC conversation by its file
+          // (falling back to the most recent) instead of silently starting an
+          // empty one — otherwise "the chat doesn't continue" after a restart.
+          if (!piSessionManager.getSession(sessionId)) {
+            if (sessionFile) {
+              await piSessionManager.getOrCreateSession(sessionId, { sessionFile });
+            } else {
+              await piSessionManager.getOrCreateSession(sessionId, { continueRecent: true });
+            }
+          }
           attachEventForwarder(io, piSessionManager, sessionId);
           const session = piSessionManager.getSession(sessionId)!;
+          // Tell the client its canonical file so it persists + resends it.
+          emitSessionInfo(socket, sessionId, piSessionManager);
 
           // Pi SDK's ImageContent (from pi-ai/types.ts) is FLAT:
           //   { type: "image", data: string /* base64 */, mimeType: string }

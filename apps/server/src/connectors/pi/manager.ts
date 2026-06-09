@@ -15,6 +15,8 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  AccountUsage,
+  ProviderInfo,
   ActiveSessionInfo,
   AgentLike,
   AgentModel,
@@ -23,6 +25,90 @@ import type {
   PersistedSessionDescriptor,
   ThinkingLevel,
 } from "../types.js";
+
+// ---- Account usage (Anthropic 5-hour + weekly limits) ----
+// These limits aren't exposed by the SDK, so we query Anthropic directly with
+// the stored OAuth token. The exact endpoint/shape is undocumented, so parsing
+// is defensive and the route can return a debug passthrough to finalize it.
+
+function clampPct(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function pickNum(o: any, keys: string[]): number | undefined {
+  for (const k of keys) if (o && typeof o[k] === "number") return o[k];
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function windowPct(w: any): number | null {
+  if (!w || typeof w !== "object") return null;
+  // Anthropic reports `utilization` as a percentage (0–100), confirmed live.
+  const direct = pickNum(w, ["utilization", "percent", "percentage", "used_pct", "usedPct"]);
+  if (direct !== undefined) return clampPct(direct);
+  // Fallback for a remaining/limit shape: that ratio is a fraction → ×100.
+  const remaining = pickNum(w, ["remaining"]);
+  const limit = pickNum(w, ["limit", "total", "max"]);
+  if (remaining !== undefined && limit && limit > 0) return clampPct((1 - remaining / limit) * 100);
+  return null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findWindow(body: any, names: string[]): any {
+  if (!body || typeof body !== "object") return undefined;
+  for (const n of names) if (body[n] !== undefined) return body[n];
+  for (const c of ["usage", "limits", "rate_limits", "data", "result"]) {
+    const inner = body[c];
+    if (inner && typeof inner === "object") {
+      for (const n of names) if (inner[n] !== undefined) return inner[n];
+    }
+  }
+  return undefined;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function resetMs(w: any): number | undefined {
+  const r = w && typeof w === "object" ? (w.resets_at ?? w.resetsAt) : undefined;
+  if (typeof r === "string") {
+    const t = Date.parse(r);
+    return Number.isFinite(t) ? t : undefined;
+  }
+  return undefined;
+}
+
+function parseAnthropicUsage(body: unknown): {
+  fiveHourPct: number | null;
+  weeklyPct: number | null;
+  fiveHourResetMs?: number;
+  weeklyResetMs?: number;
+} {
+  const five = findWindow(body, ["five_hour", "fiveHour", "5h", "five_hour_limit", "primary"]);
+  const week = findWindow(body, [
+    "seven_day",
+    "sevenDay",
+    "7d",
+    "weekly",
+    "week",
+    "seven_day_limit",
+    "secondary",
+  ]);
+  return {
+    fiveHourPct: windowPct(five),
+    weeklyPct: windowPct(week),
+    fiveHourResetMs: resetMs(five),
+    weeklyResetMs: resetMs(week),
+  };
+}
+
+/** Providers the user can authenticate + switch between in the UI. */
+const PROVIDER_CATALOG: Array<{ id: string; name: string; authType: "key" | "oauth" }> = [
+  { id: "anthropic", name: "Claude (Anthropic)", authType: "oauth" },
+  { id: "google", name: "Gemini (Google)", authType: "oauth" },
+  { id: "opencode", name: "Opencode", authType: "key" },
+  { id: "openai", name: "OpenAI", authType: "key" },
+];
 
 export class PiSessionManager implements ConnectorManager {
   private sessions = new Map<string, AgentSession>();
@@ -76,6 +162,64 @@ export class PiSessionManager implements ConnectorManager {
 
   getSession(sessionId: string): AgentLike | undefined {
     return this.sessions.get(sessionId) as unknown as AgentLike | undefined;
+  }
+
+  /**
+   * Anthropic account usage limits (5-hour + weekly). Queries Anthropic with
+   * the stored OAuth bearer token. Endpoint is undocumented and overridable via
+   * MCA_ANTHROPIC_USAGE_URL; returns nulls (never throws) when unavailable.
+   */
+  async getAccountUsage(options: { debug?: boolean } = {}): Promise<AccountUsage> {
+    const result: AccountUsage = { fiveHourPct: null, weeklyPct: null };
+    let token: string | undefined;
+    try {
+      token = await this.authStorage.getApiKey("anthropic");
+    } catch {
+      /* ignore */
+    }
+    if (!token) {
+      if (options.debug) result.debug = { url: "", status: null, error: "no anthropic token" };
+      return result;
+    }
+    const url = process.env.MCA_ANTHROPIC_USAGE_URL || "https://api.anthropic.com/api/oauth/usage";
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "anthropic-beta": "oauth-2025-04-20",
+          "anthropic-version": "2023-06-01",
+          Accept: "application/json",
+        },
+      });
+      const text = await res.text();
+      let body: unknown = text;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        /* keep raw text */
+      }
+      if (!res.ok) {
+        result.rateLimited = res.status === 429;
+        const ra = Number(res.headers.get("retry-after"));
+        if (Number.isFinite(ra) && ra > 0) result.retryAfterMs = ra * 1000;
+      }
+      const parsed = parseAnthropicUsage(body);
+      result.fiveHourPct = parsed.fiveHourPct;
+      result.weeklyPct = parsed.weeklyPct;
+      if (parsed.fiveHourResetMs || parsed.weeklyResetMs) {
+        result.resetsAt = { fiveHourMs: parsed.fiveHourResetMs, weeklyMs: parsed.weeklyResetMs };
+      }
+      if (options.debug) {
+        const headers: Record<string, string> = {};
+        res.headers.forEach((v, k) => {
+          headers[k] = v;
+        });
+        result.debug = { url, status: res.status, body, headers };
+      }
+    } catch (err) {
+      if (options.debug) result.debug = { url, status: null, error: String(err) };
+    }
+    return result;
   }
 
   /** Change the active model on an existing session. */
@@ -174,6 +318,25 @@ export class PiSessionManager implements ConnectorManager {
       contextWindow: m.contextWindow,
       reasoning: m.reasoning,
     }));
+  }
+
+  /** Model providers the user can switch between + whether they're authed. */
+  listProviders(): ProviderInfo[] {
+    return PROVIDER_CATALOG.map((p) => {
+      let authenticated = false;
+      try {
+        authenticated = this.authStorage.hasAuth(p.id);
+      } catch {
+        /* treat as not authenticated */
+      }
+      return { ...p, authenticated };
+    });
+  }
+
+  /** Store an API key for a provider; its models then appear in the picker. */
+  setProviderApiKey(id: string, key: string): void {
+    this.authStorage.set(id, { type: "api_key", key });
+    this.modelRegistry.refresh();
   }
 
   disposeSession(sessionId: string): void {

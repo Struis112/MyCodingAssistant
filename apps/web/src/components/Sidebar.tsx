@@ -26,7 +26,8 @@ function navButtonClass(active: boolean): string {
 }
 
 export function Sidebar() {
-  const { activeView, setActiveView } = useAppStore();
+  const activeView = useAppStore((s) => s.activeView);
+  const setActiveView = useAppStore((s) => s.setActiveView);
 
   useEffect(() => {
     connectSocket();
@@ -44,7 +45,7 @@ export function Sidebar() {
               className={navButtonClass(activeView === item.id)}
               title={item.label}
               aria-label={item.label}
-              aria-current={activeView === item.id ? "page" : undefined}
+              aria-current={activeView === item.id ? "true" : undefined}
             >
               <Icon className="w-5 h-5" />
             </button>
@@ -62,7 +63,7 @@ export function Sidebar() {
               className={navButtonClass(activeView === item.id)}
               title={item.label}
               aria-label={item.label}
-              aria-current={activeView === item.id ? "page" : undefined}
+              aria-current={activeView === item.id ? "true" : undefined}
             >
               <Icon className="w-5 h-5" />
             </button>

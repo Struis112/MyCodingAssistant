@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useTheme } from "@/lib/theme";
+import { useFont, FONT_CHOICES } from "@/lib/font";
 import { getSocket } from "@/lib/socket";
 import { useAppStore } from "@/lib/store";
 import { getBadges, sortModels, type ModelBadge } from "@/lib/models";
@@ -9,6 +10,7 @@ import { useModels, type Model } from "@/hooks/useModels";
 import {
   Settings as SettingsIcon,
   Palette,
+  Type,
   Brain,
   Cpu,
   CheckCircle2,
@@ -50,8 +52,14 @@ function ModelBadgePill({ kind }: { kind: ModelBadge }) {
 
 export function Settings() {
   const { theme, toggleTheme } = useTheme();
-  const { sessionId, currentModel, setCurrentModel, thinkingLevel, setThinkingLevel } =
-    useAppStore();
+  const { font, setFont } = useFont();
+  const {
+    activeSessionId: sessionId,
+    currentModel,
+    setCurrentModel,
+    thinkingLevel,
+    setThinkingLevel,
+  } = useAppStore();
 
   // Models load from SWR with localStorage cache, so the picker renders
   // instantly on subsequent visits and revalidates every 5 minutes in the
@@ -159,6 +167,56 @@ export function Settings() {
               </button>
               <p className="text-sm text-muted-foreground mt-2">
                 Current theme: {theme === "dark" ? "Dark" : "Light"}
+              </p>
+            </div>
+
+            {/* Mono font */}
+            <div className="mt-6 pt-6 border-t border-border">
+              <div className="flex items-center gap-2 mb-2">
+                <Type className="w-4 h-4 text-primary" />
+                <label className="block text-sm font-medium text-card-foreground">Font</label>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {FONT_CHOICES.map((f) => {
+                  const isSelected = font === f.id;
+                  return (
+                    <label
+                      key={f.id}
+                      className={`flex items-center gap-3 p-3 border rounded-md cursor-pointer transition-colors ${
+                        isSelected
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:bg-accent/50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="font"
+                        value={f.id}
+                        checked={isSelected}
+                        onChange={() => setFont(f.id)}
+                        className="w-4 h-4"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div
+                          className="font-medium text-card-foreground"
+                          style={{
+                            fontFamily: f.id === "jetbrains" ? "JetBrains Mono" : "Miosevka",
+                          }}
+                        >
+                          {f.label}
+                        </div>
+                        <div className="text-sm text-muted-foreground">{f.description}</div>
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-5 h-5 text-primary" />}
+                    </label>
+                  );
+                })}
+              </div>
+              <p
+                className="text-sm text-muted-foreground mt-3"
+                style={{ fontFamily: font === "jetbrains" ? "JetBrains Mono" : "Miosevka" }}
+              >
+                Preview: const greet = (x) =&gt; x != 0 ? x &gt;= 1 : 0; // 0123456789
               </p>
             </div>
           </section>

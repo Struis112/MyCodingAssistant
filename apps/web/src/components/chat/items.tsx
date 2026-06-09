@@ -76,10 +76,11 @@ export function ItemView({ item, filters }: { item: ChatItem; filters: MessageFi
 // =============================================================================
 
 function UserItem({ item }: { item: Extract<ChatItem, { kind: "user" }> }) {
-  const rail = accentClasses(ITEM_STYLES.user.accent).rail;
   return (
     <div className="flex justify-start">
-      <div className={cn("w-full border-l-2 pl-3 py-0.5 text-muted-foreground", rail)}>
+      {/* No colored rail — the RoleBadge marks the speaker. pl-3 keeps text
+          aligned with assistant replies for a calm, flush conversation. */}
+      <div className={cn("w-full pl-3 py-0.5 text-muted-foreground")}>
         <div className="flex items-center gap-2 mb-1">
           <RoleBadge kind="user" />
           <span className="text-xs text-muted-foreground/70">
@@ -107,11 +108,13 @@ function AssistantItem({
   const visibleBlocks = item.blocks.filter((b) =>
     b.type === "thinking" ? filters.thinking : filters.assistant,
   );
-  const rail = accentClasses(ITEM_STYLES.assistant.accent).rail;
   const SpinnerIcon = TOOL_STATUS_STYLES.running.icon;
   return (
     <div className="flex justify-start">
-      <div className={cn("w-full border-l-2 pl-3 text-foreground py-2", rail, "border-opacity-60")}>
+      {/* No colored rail on assistant replies — the RoleBadge already marks the
+          speaker, and a full-height accent stripe added visual noise down the
+          left of long answers. pl-3 keeps text aligned with the other items. */}
+      <div className={cn("w-full pl-3 text-foreground py-2")}>
         <div className="flex items-center gap-2 mb-1">
           <RoleBadge kind="assistant" />
           <span className="text-xs text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
@@ -212,13 +215,9 @@ function ToolItem({ item }: { item: Extract<ChatItem, { kind: "tool" }> }) {
     <div className="flex justify-start">
       <div
         className={cn(
-          "w-full bg-card border rounded-lg px-3 py-2",
-          // Subtle left-rail accent matching the tool's category, so Reads,
-          // Edits, Bashes etc. are scannable even when collapsed.
-          "border-l-4",
-          toolAccent.rail,
-          // Outer rounded border stays neutral.
-          "border-y-border border-r-border",
+          // Flush card with a uniform neutral border — no colored left rail.
+          // The tool's category is still conveyed by its colored icon below.
+          "w-full bg-card border border-border rounded-lg px-3 py-2",
         )}
       >
         <button

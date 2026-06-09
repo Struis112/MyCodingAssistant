@@ -1,5 +1,6 @@
 // Global state management with Zustand
 import { create } from "zustand";
+import { generateId } from "@/lib/utils";
 
 // ----- localStorage helpers -----
 //
@@ -61,6 +62,72 @@ export function readPersistedUserPrefs(): {
   };
 }
 
+// ----- Tabs (multi-session) -----
+
+/** One open chat tab. `id` is the logical session id (the socket room key). */
+export interface ChatTab {
+  id: string;
+  name: string | null;
+  sessionFile?: string;
+}
+
+/** Full in-memory state for one chat session (tab). Items stay resident per
+ *  session so background tabs accumulate live and switching is instant. */
+export interface SessionState {
+  id: string;
+  name: string | null;
+  sessionFile?: string;
+  items: ChatItem[];
+  isStreaming: boolean;
+  /** New output arrived while this tab was not active (activity badge). */
+  unread: boolean;
+  /** Id of the assistant item currently receiving streaming deltas. */
+  currentAssistantId: string | null;
+  /** Tab label derived from the first user message (computed once, not per
+   *  token — keeps the tab bar cheap during streaming). */
+  title: string;
+}
+
+function emptySession(id: string, name: string | null = null, sessionFile?: string): SessionState {
+  return {
+    id,
+    name,
+    sessionFile,
+    items: [],
+    isStreaming: false,
+    unread: false,
+    currentAssistantId: null,
+    title: "",
+  };
+}
+
+/** First user message, trimmed, as a tab title. "" until one exists. */
+function titleFromItems(items: ChatItem[]): string {
+  const u = items.find((i) => i.kind === "user");
+  if (u && u.kind === "user" && u.text.trim()) {
+    const t = u.text.trim().replace(/\s+/g, " ");
+    return t.length > 40 ? t.slice(0, 40) : t;
+  }
+  return "";
+}
+
+const TABS_KEY = "mca-tabs";
+const ACTIVE_TAB_KEY = "mca-active-tab";
+
+/** Restore the open tabs + active tab from localStorage (call after mount). */
+export function readPersistedTabs(): { tabs: ChatTab[]; activeId: string } {
+  const tabs = readJSON<ChatTab[]>(TABS_KEY, []);
+  if (!tabs.length) return { tabs: [{ id: "default", name: null }], activeId: "default" };
+  const stored = readString(ACTIVE_TAB_KEY, "");
+  const activeId = tabs.some((t) => t.id === stored) ? stored : tabs[0]!.id;
+  return { tabs, activeId };
+}
+
+function persistTabs(tabs: ChatTab[], activeId: string): void {
+  writeJSON(TABS_KEY, tabs);
+  writeString(ACTIVE_TAB_KEY, activeId);
+}
+
 export type View = "chat" | "sessions" | "services" | "settings";
 
 // ----- Chat items -----
@@ -119,28 +186,42 @@ interface AppState {
   activeView: View;
   setActiveView: (view: View) => void;
 
-  // Chat items
-  items: ChatItem[];
-  addItem: (item: ChatItem) => void;
-  updateItem: (id: string, update: (item: ChatItem) => ChatItem) => void;
-  findItem: (id: string) => ChatItem | undefined;
-  findToolItemByCallId: (toolCallId: string) => ChatItem | undefined;
-  clearItems: () => void;
-  setItems: (items: ChatItem[]) => void;
+  // Sessions (multi-tab). `activeSessionId` is the focused tab; `tabOrder`
+  // drives the tab bar. Each session keeps its own items so background tabs
+  // stream live and switching is instant.
+  sessions: Record<string, SessionState>;
+  tabOrder: string[];
+  activeSessionId: string;
+  pendingNewTab: boolean;
 
-  isStreaming: boolean;
-  setIsStreaming: (streaming: boolean) => void;
+  // Per-session chat ops. `sid` is the target session (event routing passes
+  // the event's session id; UI passes the active id). Routing by id is what
+  // lets a background tab update live.
+  addItem: (sid: string, item: ChatItem) => void;
+  updateItem: (sid: string, id: string, update: (item: ChatItem) => ChatItem) => void;
+  findToolItemByCallId: (sid: string, toolCallId: string) => ChatItem | undefined;
+  clearItems: (sid: string) => void;
+  setItems: (sid: string, items: ChatItem[]) => void;
+  setStreaming: (sid: string, streaming: boolean) => void;
+  setCurrentAssistantId: (sid: string, id: string | null) => void;
+  getCurrentAssistantId: (sid: string) => string | null;
 
-  // Session
-  sessionId: string;
-  setSessionId: (id: string) => void;
-  sessionFile: string | undefined;
-  setSessionFile: (path: string | undefined) => void;
-
-  // User-defined session display name (set via the `/name` command). Shown
-  // in the chat header + browser tab. Null until the user names the session.
-  sessionName: string | null;
+  // Active-session display fields (mutate the active tab + persist).
   setSessionName: (name: string | null) => void;
+  setSessionFile: (path: string | undefined) => void;
+  /** Set a specific session's file (event routing may target a background tab). */
+  setSessionFileFor: (id: string, file: string | undefined) => void;
+
+  // Tabs
+  clearPendingNewTab: () => void;
+  openTab: () => string;
+  openTabWithFile: (file: string, name?: string | null) => string;
+  switchTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  renameTab: (id: string, name: string | null) => void;
+  /** Drag-reorder: move `draggedId` to the position of `targetId`. */
+  moveTab: (draggedId: string, targetId: string) => void;
+  hydrateTabs: (tabs: ChatTab[], activeId: string) => void;
 
   // Persisted session list (server returns these on `chat:list`).
   persistedSessions: PersistedSession[];
@@ -159,35 +240,163 @@ interface AppState {
   setIsConnected: (connected: boolean) => void;
 }
 
+/** Immutably patch one session in the map. No-op if the session is gone. */
+function patchSession(
+  state: AppState,
+  sid: string,
+  patch: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>),
+): Pick<AppState, "sessions"> {
+  const cur = state.sessions[sid];
+  if (!cur) return { sessions: state.sessions };
+  const p = typeof patch === "function" ? patch(cur) : patch;
+  return { sessions: { ...state.sessions, [sid]: { ...cur, ...p } } };
+}
+
+/** Persist the tab list + active id derived from the live session map. */
+function persistFromState(s: AppState): void {
+  const tabs: ChatTab[] = s.tabOrder.map((id) => {
+    const ses = s.sessions[id];
+    return { id, name: ses?.name ?? null, sessionFile: ses?.sessionFile };
+  });
+  persistTabs(tabs, s.activeSessionId);
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   activeView: "chat",
   setActiveView: (view) => set({ activeView: view }),
 
-  items: [],
-  addItem: (item) => set((state) => ({ items: [...state.items, item] })),
-  updateItem: (id, update) =>
-    set((state) => ({
-      items: state.items.map((it) => (it.id === id ? update(it) : it)),
-    })),
-  findItem: (id) => get().items.find((it) => it.id === id),
-  findToolItemByCallId: (toolCallId) =>
-    get().items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
-  clearItems: () => set({ items: [] }),
-  setItems: (items) => set({ items }),
+  // ----- Sessions (multi-tab) -----
+  sessions: { default: emptySession("default") },
+  tabOrder: ["default"],
+  activeSessionId: "default",
+  pendingNewTab: false,
 
-  isStreaming: false,
-  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+  addItem: (sid, item) =>
+    set((s) =>
+      patchSession(s, sid, (ses) => {
+        const items = [...ses.items, item];
+        return {
+          items,
+          // Adding content to a non-focused tab raises its activity badge.
+          unread: ses.unread || sid !== s.activeSessionId,
+          // Compute the title only until one exists (cheap; not per token).
+          title: ses.title || titleFromItems(items),
+        };
+      }),
+    ),
+  updateItem: (sid, id, update) =>
+    set((s) =>
+      patchSession(s, sid, (ses) => ({
+        items: ses.items.map((it) => (it.id === id ? update(it) : it)),
+      })),
+    ),
+  findToolItemByCallId: (sid, toolCallId) =>
+    get().sessions[sid]?.items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
+  clearItems: (sid) => set((s) => patchSession(s, sid, { items: [] })),
+  setItems: (sid, items) =>
+    set((s) => patchSession(s, sid, { items, title: titleFromItems(items) })),
+  setStreaming: (sid, streaming) => set((s) => patchSession(s, sid, { isStreaming: streaming })),
+  setCurrentAssistantId: (sid, id) => set((s) => patchSession(s, sid, { currentAssistantId: id })),
+  getCurrentAssistantId: (sid) => get().sessions[sid]?.currentAssistantId ?? null,
 
-  sessionId: "default",
-  setSessionId: (id) => set({ sessionId: id }),
-  sessionFile: undefined,
   setSessionFile: (path) => {
     writeString("mca-session-file", path ?? "");
-    set({ sessionFile: path });
+    set((s) => patchSession(s, s.activeSessionId, { sessionFile: path }));
+    persistFromState(get());
+  },
+  setSessionName: (name) => {
+    set((s) => patchSession(s, s.activeSessionId, { name }));
+    persistFromState(get());
+  },
+  setSessionFileFor: (id, file) => {
+    set((s) => patchSession(s, id, { sessionFile: file }));
+    persistFromState(get());
   },
 
-  sessionName: null,
-  setSessionName: (name) => set({ sessionName: name }),
+  // ----- Tabs -----
+  clearPendingNewTab: () => set({ pendingNewTab: false }),
+
+  openTab: () => {
+    const id = generateId();
+    set((s) => ({
+      sessions: { ...s.sessions, [id]: emptySession(id) },
+      tabOrder: [...s.tabOrder, id],
+      activeSessionId: id,
+      pendingNewTab: true, // AppShell emits chat:new for a fresh session
+    }));
+    persistFromState(get());
+    return id;
+  },
+
+  openTabWithFile: (file, name = null) => {
+    const existingId = get().tabOrder.find((id) => get().sessions[id]?.sessionFile === file);
+    if (existingId) {
+      set((s) => ({
+        activeSessionId: existingId,
+        pendingNewTab: false,
+        ...patchSession(s, existingId, { unread: false }),
+      }));
+      persistFromState(get());
+      return existingId;
+    }
+    const id = generateId();
+    set((s) => ({
+      sessions: { ...s.sessions, [id]: emptySession(id, name, file) },
+      tabOrder: [...s.tabOrder, id],
+      activeSessionId: id,
+      pendingNewTab: false, // AppShell emits chat:state to restore by file
+    }));
+    persistFromState(get());
+    return id;
+  },
+
+  switchTab: (id) => {
+    if (!get().sessions[id]) return;
+    // Items stay resident, so switching is instant — just focus + clear badge.
+    set((s) => ({ activeSessionId: id, ...patchSession(s, id, { unread: false }) }));
+    persistFromState(get());
+  },
+
+  closeTab: (id) => {
+    const s = get();
+    if (s.tabOrder.length <= 1) return; // keep at least one tab
+    const idx = s.tabOrder.indexOf(id);
+    const tabOrder = s.tabOrder.filter((t) => t !== id);
+    const sessions = { ...s.sessions };
+    delete sessions[id];
+    const activeSessionId =
+      s.activeSessionId === id ? tabOrder[Math.max(0, idx - 1)]! : s.activeSessionId;
+    set({ sessions, tabOrder, activeSessionId });
+    persistFromState(get());
+  },
+
+  renameTab: (id, name) => {
+    set((s) => patchSession(s, id, { name }));
+    persistFromState(get());
+  },
+
+  moveTab: (draggedId, targetId) => {
+    if (draggedId === targetId) return;
+    set((s) => {
+      const order = [...s.tabOrder];
+      const from = order.indexOf(draggedId);
+      const to = order.indexOf(targetId);
+      if (from === -1 || to === -1) return {};
+      order.splice(from, 1);
+      order.splice(to, 0, draggedId);
+      return { tabOrder: order };
+    });
+    persistFromState(get());
+  },
+
+  hydrateTabs: (tabs, activeId) => {
+    const sessions: Record<string, SessionState> = {};
+    for (const t of tabs) sessions[t.id] = emptySession(t.id, t.name, t.sessionFile);
+    const tabOrder = tabs.map((t) => t.id);
+    const activeSessionId = sessions[activeId] ? activeId : (tabOrder[0] ?? "default");
+    if (!sessions[activeSessionId]) sessions[activeSessionId] = emptySession(activeSessionId);
+    set({ sessions, tabOrder: tabOrder.length ? tabOrder : [activeSessionId], activeSessionId });
+  },
 
   persistedSessions: [],
   setPersistedSessions: (sessions) => set({ persistedSessions: sessions }),

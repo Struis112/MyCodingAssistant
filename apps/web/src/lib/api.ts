@@ -3,7 +3,19 @@
 // the streaming model. SERVER_URL mirrors the socket/useModels default so a
 // single env var (NEXT_PUBLIC_SERVER_URL) configures every transport.
 
-export const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:7641";
+// Resolve the API/WebSocket base URL. When NEXT_PUBLIC_SERVER_URL isn't set,
+// derive it from the page's own host so the app works over the LAN (a remote
+// device must NOT talk to its own "localhost"). Falls back to localhost during
+// SSR (no window) and for the default local case.
+function resolveServerUrl(): string {
+  if (process.env.NEXT_PUBLIC_SERVER_URL) return process.env.NEXT_PUBLIC_SERVER_URL;
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:7641`;
+  }
+  return "http://localhost:7641";
+}
+
+export const SERVER_URL = resolveServerUrl();
 
 export interface ApiResult {
   ok: boolean;

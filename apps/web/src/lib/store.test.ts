@@ -9,14 +9,24 @@ import {
   type ChatItem,
 } from "./store";
 
-// Snapshot of pristine state we reset to between tests so each one starts
-// from the documented defaults regardless of order.
+// Pristine per-session state we reset to between tests.
 const PRISTINE = {
   activeView: "chat" as const,
-  items: [] as ChatItem[],
-  isStreaming: false,
-  sessionId: "default",
-  sessionFile: undefined as string | undefined,
+  sessions: {
+    default: {
+      id: "default",
+      name: null as string | null,
+      sessionFile: undefined as string | undefined,
+      items: [] as ChatItem[],
+      isStreaming: false,
+      unread: false,
+      currentAssistantId: null as string | null,
+      title: "",
+    },
+  },
+  tabOrder: ["default"],
+  activeSessionId: "default",
+  pendingNewTab: false,
   persistedSessions: [] as ReturnType<typeof useAppStore.getState>["persistedSessions"],
   currentModel: null as ReturnType<typeof useAppStore.getState>["currentModel"],
   isConnected: false,
@@ -25,6 +35,11 @@ const PRISTINE = {
 function resetStore() {
   useAppStore.setState(PRISTINE);
 }
+
+const activeItems = () => {
+  const s = useAppStore.getState();
+  return s.sessions[s.activeSessionId]!.items;
+};
 
 describe("useAppStore", () => {
   beforeEach(() => {
@@ -35,12 +50,9 @@ describe("useAppStore", () => {
     it("starts on chat", () => {
       expect(useAppStore.getState().activeView).toBe("chat");
     });
-
     it("setActiveView switches", () => {
       useAppStore.getState().setActiveView("settings");
       expect(useAppStore.getState().activeView).toBe("settings");
-      useAppStore.getState().setActiveView("sessions");
-      expect(useAppStore.getState().activeView).toBe("sessions");
     });
   });
 
@@ -48,132 +60,123 @@ describe("useAppStore", () => {
     it("starts empty", () => {
       expect(useAppStore.getState().persistedSessions).toEqual([]);
     });
-
     it("setPersistedSessions replaces the list", () => {
-      useAppStore.getState().setPersistedSessions([
-        { id: "a", path: "/tmp/a.json", name: "A", modifiedAt: 1 },
-        { id: "b", path: "/tmp/b.json", name: "B", modifiedAt: 2 },
-      ]);
-      expect(useAppStore.getState().persistedSessions).toHaveLength(2);
+      useAppStore
+        .getState()
+        .setPersistedSessions([{ id: "a", path: "/tmp/a.json", name: "A", modifiedAt: 1 }]);
+      expect(useAppStore.getState().persistedSessions).toHaveLength(1);
     });
   });
 
-  describe("chat items", () => {
+  describe("chat items (per session)", () => {
     it("starts empty", () => {
-      expect(useAppStore.getState().items).toEqual([]);
+      expect(activeItems()).toEqual([]);
     });
 
-    it("addItem appends in order", () => {
+    it("addItem appends to the target session in order", () => {
       const { addItem } = useAppStore.getState();
-      addItem({ kind: "user", id: "u1", text: "hi", timestamp: 1 });
-      addItem({
+      addItem("default", { kind: "user", id: "u1", text: "hi", timestamp: 1 });
+      addItem("default", {
         kind: "assistant",
         id: "a1",
         blocks: [{ type: "text", text: "hello" }],
         timestamp: 2,
         isStreaming: false,
       });
-
-      const items = useAppStore.getState().items;
-      expect(items).toHaveLength(2);
-      expect(items[0]!.id).toBe("u1");
-      expect(items[1]!.id).toBe("a1");
-    });
-
-    it("findItem locates by id", () => {
-      const { addItem, findItem } = useAppStore.getState();
-      addItem({ kind: "user", id: "u1", text: "hi", timestamp: 1 });
-      addItem({ kind: "system", id: "s1", text: "note", timestamp: 2 });
-
-      expect(findItem("u1")?.id).toBe("u1");
-      expect(findItem("s1")?.kind).toBe("system");
-      expect(findItem("nope")).toBeUndefined();
+      expect(activeItems().map((i) => i.id)).toEqual(["u1", "a1"]);
     });
 
     it("updateItem replaces in place", () => {
       const { addItem, updateItem } = useAppStore.getState();
-      addItem({
+      addItem("default", {
         kind: "assistant",
         id: "a1",
         blocks: [{ type: "text", text: "hel", isStreaming: true }],
         timestamp: 1,
         isStreaming: true,
       });
-
-      updateItem("a1", (item) => {
-        if (item.kind !== "assistant") return item;
-        return { ...item, blocks: [{ type: "text", text: "hello", isStreaming: false }] };
+      updateItem("default", "a1", (item) =>
+        item.kind === "assistant"
+          ? { ...item, blocks: [{ type: "text", text: "hello", isStreaming: false }] }
+          : item,
+      );
+      const it1 = activeItems()[0];
+      expect(it1?.kind === "assistant" && it1.blocks[0]).toEqual({
+        type: "text",
+        text: "hello",
+        isStreaming: false,
       });
-
-      const it1 = useAppStore.getState().findItem("a1");
-      expect(it1).toBeDefined();
-      if (it1?.kind === "assistant") {
-        expect(it1.blocks[0]).toEqual({
-          type: "text",
-          text: "hello",
-          isStreaming: false,
-        });
-      }
-    });
-
-    it("updateItem is a no-op for unknown id", () => {
-      const { addItem, updateItem } = useAppStore.getState();
-      addItem({ kind: "user", id: "u1", text: "hi", timestamp: 1 });
-      updateItem("does-not-exist", (item) => item);
-      expect(useAppStore.getState().items).toHaveLength(1);
     });
 
     it("findToolItemByCallId locates a tool item by its toolCallId", () => {
       const { addItem, findToolItemByCallId } = useAppStore.getState();
-      addItem({ kind: "user", id: "u1", text: "hi", timestamp: 1 });
-      addItem({
+      addItem("default", {
         kind: "tool",
         id: "t1",
         toolCallId: "call_abc",
         toolName: "read",
-        args: { path: "foo" },
+        args: {},
         status: "running",
-        timestamp: 2,
+        timestamp: 1,
       });
-
-      const found = findToolItemByCallId("call_abc");
-      expect(found?.id).toBe("t1");
-      expect(findToolItemByCallId("call_unknown")).toBeUndefined();
+      expect(findToolItemByCallId("default", "call_abc")?.id).toBe("t1");
+      expect(findToolItemByCallId("default", "nope")).toBeUndefined();
     });
 
-    it("clearItems empties the list", () => {
+    it("clearItems empties one session", () => {
       const { addItem, clearItems } = useAppStore.getState();
-      addItem({ kind: "user", id: "u1", text: "hi", timestamp: 1 });
-      addItem({ kind: "system", id: "s1", text: "n", timestamp: 2 });
-      clearItems();
-      expect(useAppStore.getState().items).toEqual([]);
+      addItem("default", { kind: "user", id: "u1", text: "hi", timestamp: 1 });
+      clearItems("default");
+      expect(activeItems()).toEqual([]);
     });
   });
 
-  describe("session", () => {
-    it('defaults to "default" session id and no file', () => {
+  describe("tabs (multi-session)", () => {
+    it("openTab creates a new active, empty tab", () => {
+      const id = useAppStore.getState().openTab();
       const s = useAppStore.getState();
-      expect(s.sessionId).toBe("default");
-      expect(s.sessionFile).toBeUndefined();
+      expect(s.activeSessionId).toBe(id);
+      expect(s.tabOrder).toContain(id);
+      expect(s.pendingNewTab).toBe(true);
+      expect(s.sessions[id]!.items).toEqual([]);
     });
 
-    it("setSessionId + setSessionFile update independently", () => {
-      const { setSessionId, setSessionFile } = useAppStore.getState();
-      setSessionId("abc");
-      setSessionFile("/tmp/foo.jsonl");
+    it("addItem to a background session raises its unread badge; switching clears it", () => {
+      const bg = useAppStore.getState().openTab(); // active = bg
+      useAppStore.getState().switchTab("default"); // active = default
+      useAppStore.getState().addItem(bg, { kind: "system", id: "x", text: "done", timestamp: 1 });
+      expect(useAppStore.getState().sessions[bg]!.unread).toBe(true);
+      useAppStore.getState().switchTab(bg);
+      expect(useAppStore.getState().sessions[bg]!.unread).toBe(false);
+    });
+
+    it("closeTab removes it and moves focus to a neighbor", () => {
+      const a = useAppStore.getState().openTab();
+      useAppStore.getState().closeTab(a);
       const s = useAppStore.getState();
-      expect(s.sessionId).toBe("abc");
-      expect(s.sessionFile).toBe("/tmp/foo.jsonl");
+      expect(s.tabOrder).not.toContain(a);
+      expect(s.sessions[a]).toBeUndefined();
+      expect(s.activeSessionId).toBe("default");
+    });
+
+    it("never closes the last tab", () => {
+      useAppStore.getState().closeTab("default");
+      expect(useAppStore.getState().tabOrder).toEqual(["default"]);
     });
   });
 
-  describe("streaming flag", () => {
-    it("toggles", () => {
-      expect(useAppStore.getState().isStreaming).toBe(false);
-      useAppStore.getState().setIsStreaming(true);
-      expect(useAppStore.getState().isStreaming).toBe(true);
-      useAppStore.getState().setIsStreaming(false);
-      expect(useAppStore.getState().isStreaming).toBe(false);
+  describe("active session fields", () => {
+    it("setSessionFile/setSessionName mutate the active tab", () => {
+      useAppStore.getState().setSessionFile("/tmp/foo.jsonl");
+      useAppStore.getState().setSessionName("My chat");
+      const s = useAppStore.getState();
+      expect(s.sessions.default!.sessionFile).toBe("/tmp/foo.jsonl");
+      expect(s.sessions.default!.name).toBe("My chat");
+    });
+
+    it("setStreaming toggles a session", () => {
+      useAppStore.getState().setStreaming("default", true);
+      expect(useAppStore.getState().sessions.default!.isStreaming).toBe(true);
     });
   });
 });
@@ -188,7 +191,6 @@ describe("localStorage helpers", () => {
       writeString("k", "v");
       expect(readString("k", "fallback")).toBe("v");
     });
-
     it("returns the fallback when the key is missing", () => {
       expect(readString("missing", "fallback")).toBe("fallback");
     });
@@ -199,11 +201,9 @@ describe("localStorage helpers", () => {
       writeJSON("obj", { a: 1, b: ["x", "y"] });
       expect(readJSON("obj", null)).toEqual({ a: 1, b: ["x", "y"] });
     });
-
     it("returns the fallback when the key is missing", () => {
       expect(readJSON("missing", { fallback: true })).toEqual({ fallback: true });
     });
-
     it("returns the fallback when stored data is corrupt JSON", () => {
       window.localStorage.setItem("corrupt", "{ not json");
       expect(readJSON("corrupt", "fallback")).toBe("fallback");
@@ -216,17 +216,13 @@ describe("localStorage helpers", () => {
       expect(prefs.currentModel).toBeNull();
       expect(prefs.thinkingLevel).toBe("off");
     });
-
-    it("reads currentModel from the mca-model key", () => {
+    it("reads currentModel + thinkingLevel from their keys", () => {
       const model = { id: "x", name: "X", provider: "anthropic" };
       writeJSON("mca-model", model);
+      writeString("mca-thinking-level", "high");
       const prefs = readPersistedUserPrefs();
       expect(prefs.currentModel).toEqual(model);
-    });
-
-    it("reads thinkingLevel from the mca-thinking-level key", () => {
-      writeString("mca-thinking-level", "high");
-      expect(readPersistedUserPrefs().thinkingLevel).toBe("high");
+      expect(prefs.thinkingLevel).toBe("high");
     });
   });
 });

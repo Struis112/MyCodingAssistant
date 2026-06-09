@@ -82,7 +82,44 @@ export interface AvailableModel {
 }
 
 /** Lifecycle and metadata operations the handlers / REST routes invoke. */
+/** Account-level usage limits (e.g. Anthropic's 5-hour + weekly windows). */
+export interface AccountUsage {
+  fiveHourPct: number | null;
+  weeklyPct: number | null;
+  resetsAt?: { fiveHourMs?: number; weeklyMs?: number };
+  /** Upstream rate-limited this fetch (HTTP 429). */
+  rateLimited?: boolean;
+  /** Suggested backoff from the upstream `retry-after` header, in ms. */
+  retryAfterMs?: number;
+  /** Debug-only upstream details, to help finalize the endpoint/parsing. */
+  debug?: {
+    url: string;
+    status: number | null;
+    body?: unknown;
+    error?: string;
+    headers?: Record<string, string>;
+  };
+}
+
+/** A model provider the user can authenticate + switch between (Claude/Gemini/…). */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  /** "key" → paste an API key in-app; "oauth" → sign in via `pi /login`. */
+  authType: "key" | "oauth";
+  authenticated: boolean;
+}
+
 export interface ConnectorManager {
+  /**
+   * Optional: report account usage limits (5-hour + weekly). Not every
+   * connector/provider supports this; returns nulls when unavailable.
+   */
+  getAccountUsage?(options?: { debug?: boolean }): Promise<AccountUsage>;
+  /** Optional: list model providers + their auth status. */
+  listProviders?(): ProviderInfo[];
+  /** Optional: store an API key for a provider (then its models appear). */
+  setProviderApiKey?(id: string, key: string): void;
   getOrCreateSession(
     sessionId: string,
     options?: { sessionFile?: string; continueRecent?: boolean },

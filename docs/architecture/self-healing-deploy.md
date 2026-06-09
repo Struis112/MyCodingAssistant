@@ -43,6 +43,18 @@ controller edits the very system it runs inside.
   for local dev.
 - Rolling back **data/state** (see §9 — code rollback ≠ data rollback).
 
+## 2a. Relationship to run modes (dev/HMR vs prod)
+
+This pipeline is the **production** path. On a local single-user machine the
+better experience is **dev/HMR** (see the README "Run modes" section): `next dev`
+Fast Refresh + `tsx watch` make the assistant's edits appear instantly with no
+build/restart/rollback. You trade validated rollback for immediacy (errors show
+up instantly and you fix forward).
+
+Switchable from the **Services** screen ("Run mode" card) — backed by
+`GET/POST /api/runmode`, which rewrites the NSSM `AppParameters` and bounces the
+service. Use **dev/HMR locally**, this **deploy pipeline for shipping to others**.
+
 ## 3. Approved decisions (this iteration)
 
 | Decision                        | Value                                                                                                                                                              |

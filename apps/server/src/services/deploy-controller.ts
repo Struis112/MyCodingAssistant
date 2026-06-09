@@ -186,6 +186,7 @@ export class DeployController {
 
       if (!failure) {
         this.setPhase("promoted", attempt, start);
+        // eslint-disable-next-line no-await-in-loop
         await this.knownGood.promote();
         journal.push({ attempt, outcome: "promoted", at: this.now() });
         return { outcome: "promoted", attempts: attempt, journal, elapsedMs: elapsed() };
@@ -194,6 +195,7 @@ export class DeployController {
       // Candidate failed: get the LIVE system back on known-good immediately,
       // record the attempt, then ask the AI to produce the next candidate.
       this.setPhase("rolling_back", attempt, start);
+      // eslint-disable-next-line no-await-in-loop
       await this.knownGood.rollback();
       journal.push({
         attempt,

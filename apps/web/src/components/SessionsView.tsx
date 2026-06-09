@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FileText, FolderOpen, MessageSquare, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { sessionTitle } from "@/components/chat/utils";
@@ -26,8 +27,13 @@ function formatRelative(ts: number): string {
  * active view back to "chat" so the user sees the rehydrated conversation.
  */
 export function SessionsView() {
-  const { persistedSessions, setPersistedSessions, sessionId, sessionFile, setActiveView } =
+  const { persistedSessions, setPersistedSessions, setActiveView, openTab, openTabWithFile } =
     useAppStore();
+  // Highlight any session that's open in a tab. useShallow keeps the derived
+  // array stable across renders (a fresh array each call would loop React).
+  const openFiles = useAppStore(
+    useShallow((s) => s.tabOrder.map((id) => s.sessions[id]?.sessionFile)),
+  );
 
   // The session awaiting delete confirmation (null = no dialog open). We keep
   // the whole descriptor so the dialog can show its name.
@@ -53,12 +59,14 @@ export function SessionsView() {
   }, [setPersistedSessions]);
 
   function handleResume(sessionFilePath: string) {
-    getSocket().emit("chat:resume", { sessionId, sessionFile: sessionFilePath });
+    // Open (or focus) the session in its own tab; AppShell loads it by file.
+    openTabWithFile(sessionFilePath);
     setActiveView("chat");
   }
 
   function handleNew() {
-    getSocket().emit("chat:new", { sessionId });
+    // Fresh session in a new tab; AppShell emits chat:new for it.
+    openTab();
     setActiveView("chat");
   }
 
@@ -109,7 +117,7 @@ export function SessionsView() {
               .slice()
               .sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0))
               .map((session) => {
-                const isActive = session.path === sessionFile;
+                const isActive = openFiles.includes(session.path);
                 // Use the same title derivation as the chat header so the
                 // names are consistent across views (strips timestamp prefix
                 // and .json extension).

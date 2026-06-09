@@ -1,11 +1,41 @@
 // REST API Routes — chat sessions, model list, and file-edit revert.
 
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Express } from "express";
 import type { ConnectorManager } from "../connectors/types.js";
 import { parseUnifiedPatch, resolveWithinRoot, reverseApply } from "../services/revert.js";
+
+/** Best-effort Content-Type from a file extension (for /api/files/raw). */
+const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".avif": "image/avif",
+  ".pdf": "application/pdf",
+  ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+};
+
+function contentTypeFor(filePath: string): string {
+  return CONTENT_TYPES[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
 
 export function registerApiRoutes(
   app: Express,
@@ -117,6 +147,42 @@ export function registerApiRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
+    }
+  });
+
+  // Stream a file's raw bytes with a best-effort Content-Type. Unlike
+  // /api/files/read (which returns UTF-8 JSON for the editor), this serves
+  // binary content as-is so the browser can preview images inline or open a
+  // file in a new tab. Same project-root confinement as every other file route.
+  app.get("/api/files/raw", async (req, res) => {
+    const rel = typeof req.query.path === "string" ? req.query.path : "";
+    if (!rel) {
+      res.status(400).json({ error: "`path` query param is required." });
+      return;
+    }
+    const abs = resolveWithinRoot(cwd, rel);
+    if (!abs) {
+      res.status(403).json({ error: "Path is outside the project directory." });
+      return;
+    }
+    try {
+      const info = await stat(abs);
+      if (!info.isFile()) {
+        res.status(404).json({ error: "Not a regular file." });
+        return;
+      }
+      res.setHeader("Content-Type", contentTypeFor(abs));
+      res.setHeader("Content-Length", String(info.size));
+      // inline so images render in-page; the filename is a nicety for downloads.
+      res.setHeader("Content-Disposition", `inline; filename="${path.basename(abs)}"`);
+      const stream = createReadStream(abs);
+      stream.on("error", () => {
+        if (!res.headersSent) res.status(500).end();
+        else res.end();
+      });
+      stream.pipe(res);
+    } catch {
+      res.status(404).json({ error: "File not found." });
     }
   });
 

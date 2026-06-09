@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useAppStore } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { generateId } from "@/lib/utils";
@@ -8,54 +8,32 @@ import { agentMessagesToChatItems } from "./agentMessages";
 import type { RawMessage } from "./types";
 
 /**
- * Subscribe to the server's chat-event stream and translate every
- * AgentSessionEvent into ChatItem updates on the global store.
+ * Subscribe (once) to the server's chat-event stream and route every event to
+ * the session it belongs to (`data.sessionId`) — NOT just the active tab. That
+ * routing is what lets background tabs stream live and raise an unread badge.
  *
- * The wire payload `event` is intentionally typed loosely (`any` underneath
- * an unknown-cast) because it comes straight from the Pi SDK's
- * AgentSessionEvent discriminated union, and pulling that type in here
- * would couple the web bundle to SDK internals it otherwise doesn't need.
- *
- * Side-effects this hook manages:
- *   - assistant message lifecycle (message_start / message_update *_delta /
- *     message_end), including the streaming-cursor flag on each block
- *   - tool execution lifecycle (tool_execution_start / _update / _end)
- *   - chat:done — finalises any lingering streaming flags
- *   - chat:error — appends a system item with the error text
- *   - chat:resumed — replaces the items with the rehydrated history
- *   - chat:new — clears the items list
+ * Per-session item/streaming state lives in the store keyed by session id; the
+ * streaming-cursor (which assistant item is receiving deltas) is the store's
+ * `currentAssistantId` per session. Handlers read the latest store via
+ * `getState()` so the subscription is stable (no re-subscribe on tab switch).
  */
 export function useChatEvents() {
-  const {
-    addItem,
-    updateItem,
-    findToolItemByCallId,
-    clearItems,
-    setItems,
-    setIsStreaming,
-    sessionId,
-    setSessionFile,
-    setSessionName,
-  } = useAppStore();
-
-  // Holds the id of the currently-streaming assistant item so deltas can
-  // be appended to it across many events without searching the array.
-  const currentAssistantIdRef = useRef<string | null>(null);
-
   useEffect(() => {
     const socket = getSocket();
+    const store = () => useAppStore.getState();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const onEvent = (data: { sessionId: string; event: any }) => {
-      if (data.sessionId !== sessionId) return;
+      const sid = data.sessionId;
       const ev = data.event;
-      if (!ev || typeof ev !== "object") return;
+      if (!sid || !ev || typeof ev !== "object") return;
+      const s = store();
 
       // ---- assistant message lifecycle ----
       if (ev.type === "message_start" && ev.message?.role === "assistant") {
         const id = generateId();
-        currentAssistantIdRef.current = id;
-        addItem({
+        s.setCurrentAssistantId(sid, id);
+        s.addItem(sid, {
           kind: "assistant",
           id,
           blocks: [],
@@ -67,11 +45,11 @@ export function useChatEvents() {
 
       if (ev.type === "message_update") {
         const sub = ev.assistantMessageEvent;
-        const currentId = currentAssistantIdRef.current;
+        const currentId = s.getCurrentAssistantId(sid);
         if (!sub || !currentId) return;
 
         const appendToLastBlock = (blockType: "text" | "thinking", delta: string) => {
-          updateItem(currentId, (it) => {
+          s.updateItem(sid, currentId, (it) => {
             if (it.kind !== "assistant") return it;
             const blocks = [...it.blocks];
             let idx = -1;
@@ -96,18 +74,21 @@ export function useChatEvents() {
         };
 
         const finishBlock = (blockType: "text" | "thinking") => {
-          updateItem(currentId, (it) => {
-            if (it.kind !== "assistant") return it;
-            const blocks = it.blocks.map((b) =>
-              b.type === blockType && b.isStreaming ? { ...b, isStreaming: false } : b,
-            );
-            return { ...it, blocks };
-          });
+          s.updateItem(sid, currentId, (it) =>
+            it.kind === "assistant"
+              ? {
+                  ...it,
+                  blocks: it.blocks.map((b) =>
+                    b.type === blockType && b.isStreaming ? { ...b, isStreaming: false } : b,
+                  ),
+                }
+              : it,
+          );
         };
 
         switch (sub.type) {
           case "text_start":
-            updateItem(currentId, (it) =>
+            s.updateItem(sid, currentId, (it) =>
               it.kind === "assistant"
                 ? { ...it, blocks: [...it.blocks, { type: "text", text: "", isStreaming: true }] }
                 : it,
@@ -120,7 +101,7 @@ export function useChatEvents() {
             finishBlock("text");
             return;
           case "thinking_start":
-            updateItem(currentId, (it) =>
+            s.updateItem(sid, currentId, (it) =>
               it.kind === "assistant"
                 ? {
                     ...it,
@@ -140,20 +121,20 @@ export function useChatEvents() {
       }
 
       if (ev.type === "message_end") {
-        const currentId = currentAssistantIdRef.current;
+        const currentId = s.getCurrentAssistantId(sid);
         if (currentId) {
-          updateItem(currentId, (it) =>
+          s.updateItem(sid, currentId, (it) =>
             it.kind === "assistant" ? { ...it, isStreaming: false } : it,
           );
         }
-        currentAssistantIdRef.current = null;
+        s.setCurrentAssistantId(sid, null);
         return;
       }
 
       // ---- tool execution lifecycle ----
       if (ev.type === "tool_execution_start") {
-        if (findToolItemByCallId(ev.toolCallId)) return;
-        addItem({
+        if (s.findToolItemByCallId(sid, ev.toolCallId)) return;
+        s.addItem(sid, {
           kind: "tool",
           id: generateId(),
           toolCallId: ev.toolCallId,
@@ -166,18 +147,18 @@ export function useChatEvents() {
       }
 
       if (ev.type === "tool_execution_update") {
-        const existing = findToolItemByCallId(ev.toolCallId);
+        const existing = s.findToolItemByCallId(sid, ev.toolCallId);
         if (!existing || existing.kind !== "tool") return;
-        updateItem(existing.id, (it) =>
+        s.updateItem(sid, existing.id, (it) =>
           it.kind === "tool" ? { ...it, result: ev.partialResult } : it,
         );
         return;
       }
 
       if (ev.type === "tool_execution_end") {
-        const existing = findToolItemByCallId(ev.toolCallId);
+        const existing = s.findToolItemByCallId(sid, ev.toolCallId);
         if (!existing || existing.kind !== "tool") return;
-        updateItem(existing.id, (it) =>
+        s.updateItem(sid, existing.id, (it) =>
           it.kind === "tool"
             ? {
                 ...it,
@@ -192,25 +173,26 @@ export function useChatEvents() {
     };
 
     const onDone = (data: { sessionId: string }) => {
-      if (data.sessionId !== sessionId) return;
-      setIsStreaming(false);
-      // Defensive: any lingering streaming blocks get finalized
-      const current = currentAssistantIdRef.current;
-      if (current) {
-        updateItem(current, (it) => (it.kind === "assistant" ? { ...it, isStreaming: false } : it));
-        currentAssistantIdRef.current = null;
+      const s = store();
+      s.setStreaming(data.sessionId, false);
+      const cur = s.getCurrentAssistantId(data.sessionId);
+      if (cur) {
+        s.updateItem(data.sessionId, cur, (it) =>
+          it.kind === "assistant" ? { ...it, isStreaming: false } : it,
+        );
+        s.setCurrentAssistantId(data.sessionId, null);
       }
     };
 
     const onError = (data: { sessionId: string; error: string }) => {
-      if (data.sessionId !== sessionId) return;
-      addItem({
+      const s = store();
+      s.addItem(data.sessionId, {
         kind: "system",
         id: generateId(),
         text: `Error: ${data.error}`,
         timestamp: Date.now(),
       });
-      setIsStreaming(false);
+      s.setStreaming(data.sessionId, false);
     };
 
     const onResumed = (data: {
@@ -219,44 +201,57 @@ export function useChatEvents() {
       name?: string | null;
       messages?: RawMessage[];
     }) => {
-      if (data.sessionId !== sessionId) return;
-      setSessionFile(data.sessionFile);
-      setSessionName(data.name ?? null);
-      const restored = agentMessagesToChatItems(data.messages || []);
-      setItems(restored);
+      const s = store();
+      s.setSessionFileFor(data.sessionId, data.sessionFile);
+      s.renameTab(data.sessionId, data.name ?? null);
+      s.setItems(data.sessionId, agentMessagesToChatItems(data.messages || []));
     };
 
-    // chat:state:result is the server's answer to the chat:state we send on
-    // every (re)connect. After a server restart or a plain browser reload the
-    // local item list is empty while the server holds the persisted history,
-    // so rehydrate from it. Guard on an empty list so a reconnect during an
-    // active chat can't clobber in-flight items.
     const onState = (data: {
       sessionId: string;
-      state: null | { sessionFile?: string; name?: string | null; messages?: RawMessage[] };
+      state: null | {
+        sessionFile?: string;
+        name?: string | null;
+        isStreaming?: boolean;
+        messages?: RawMessage[];
+      };
     }) => {
-      if (data.sessionId !== sessionId) return;
       const st = data.state;
       if (!st) return;
-      if (st.sessionFile) setSessionFile(st.sessionFile);
-      if (st.name !== undefined) setSessionName(st.name ?? null);
+      const s = store();
+      if (st.sessionFile) s.setSessionFileFor(data.sessionId, st.sessionFile);
+      if (st.name !== undefined) s.renameTab(data.sessionId, st.name ?? null);
       const msgs = st.messages;
-      if (msgs && msgs.length > 0 && useAppStore.getState().items.length === 0) {
-        setItems(agentMessagesToChatItems(msgs));
+      if (!msgs || msgs.length === 0) return;
+      const haveItems = (s.sessions[data.sessionId]?.items.length ?? 0) > 0;
+      // Reconcile from the server's persisted state on (re)connect: load it when
+      // we have nothing, OR when the server is NOT mid-stream. The latter repairs
+      // a turn that a restart interrupted — no stuck "streaming…" items, and the
+      // full saved detail of what happened is shown.
+      if (!haveItems || st.isStreaming === false) {
+        s.setItems(data.sessionId, agentMessagesToChatItems(msgs));
+        s.setStreaming(data.sessionId, !!st.isStreaming);
+        if (!st.isStreaming) s.setCurrentAssistantId(data.sessionId, null);
       }
     };
 
     const onNew = (data: { sessionId: string; sessionFile?: string; name?: string | null }) => {
-      if (data.sessionId !== sessionId) return;
-      setSessionFile(data.sessionFile);
-      setSessionName(data.name ?? null);
-      clearItems();
+      const s = store();
+      s.setSessionFileFor(data.sessionId, data.sessionFile);
+      s.renameTab(data.sessionId, data.name ?? null);
+      s.clearItems(data.sessionId);
+    };
+
+    const onInfo = (data: { sessionId: string; sessionFile?: string; name?: string | null }) => {
+      const s = store();
+      if (data.sessionFile) s.setSessionFileFor(data.sessionId, data.sessionFile);
+      if (data.name !== undefined) s.renameTab(data.sessionId, data.name ?? null);
     };
 
     const onNameChanged = (data: { sessionId: string; name: string }) => {
-      if (data.sessionId !== sessionId) return;
-      setSessionName(data.name);
-      addItem({
+      const s = store();
+      s.renameTab(data.sessionId, data.name);
+      s.addItem(data.sessionId, {
         kind: "system",
         id: generateId(),
         text: `Renamed session to “${data.name}”.`,
@@ -270,6 +265,7 @@ export function useChatEvents() {
     socket.on("chat:resumed", onResumed);
     socket.on("chat:state:result", onState);
     socket.on("chat:new", onNew);
+    socket.on("session:info", onInfo);
     socket.on("session:nameChanged", onNameChanged);
 
     return () => {
@@ -279,17 +275,8 @@ export function useChatEvents() {
       socket.off("chat:resumed", onResumed);
       socket.off("chat:state:result", onState);
       socket.off("chat:new", onNew);
+      socket.off("session:info", onInfo);
       socket.off("session:nameChanged", onNameChanged);
     };
-  }, [
-    sessionId,
-    addItem,
-    updateItem,
-    findToolItemByCallId,
-    setIsStreaming,
-    setItems,
-    clearItems,
-    setSessionFile,
-    setSessionName,
-  ]);
+  }, []);
 }

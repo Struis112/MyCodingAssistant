@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Brain, Terminal } from "lucide-react";
+import { Terminal } from "lucide-react";
 import { useAppStore } from "@/lib/store";
+import { useShallow } from "zustand/react/shallow";
 import { getSocket } from "@/lib/socket";
 import { Composer } from "@/components/chat/Composer";
 import { ItemView } from "@/components/chat/items";
 import { MessageFilterMenu, isItemVisible } from "@/components/chat/Filters";
 import { useChatEvents } from "@/components/chat/useChatEvents";
+import { ChatTabs } from "@/components/chat/ChatTabs";
+import { ModelPicker, EffortPicker } from "@/components/chat/HeaderControls";
+import { useUsage } from "@/hooks/useUsage";
 import { sessionTitle } from "@/components/chat/utils";
 import type { MessageFilters } from "@/components/chat/types";
 
@@ -23,9 +27,22 @@ import type { MessageFilters } from "@/components/chat/types";
  *   - scrollable messages region with auto-scroll
  *   - the filters state (passed to both header menu and item visibility)
  */
+// Stable empty array so the `items` selector keeps identity when a session has
+// none (avoids needless re-renders under useShallow).
+const EMPTY_ITEMS: never[] = [];
+
 export function ChatScreen() {
-  const { items, sessionFile, sessionName, currentModel, thinkingLevel, isStreaming } =
-    useAppStore();
+  const { items, sessionFile, sessionName, isStreaming } = useAppStore(
+    useShallow((s) => {
+      const a = s.sessions[s.activeSessionId];
+      return {
+        items: a?.items ?? EMPTY_ITEMS,
+        sessionFile: a?.sessionFile,
+        sessionName: a?.name ?? null,
+        isStreaming: a?.isStreaming ?? false,
+      };
+    }),
+  );
 
   const [filters, setFilters] = useState<MessageFilters>({
     assistant: true,
@@ -34,71 +51,126 @@ export function ChatScreen() {
     system: true,
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
 
   // Subscribe to socket events. The hook handles all add/update/clear calls
   // against the store so we don't need to thread callbacks here.
   useChatEvents();
 
-  // Auto-scroll when items change.
+  // Track whether the view is pinned to the bottom so we only auto-scroll when
+  // the user hasn't scrolled up to read earlier messages.
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = near;
+    setAtBottom(near);
+  };
+
+  // Auto-scroll on new content ONLY when already near the bottom. Instant while
+  // streaming (smooth lags behind token bursts); smooth for one-off additions.
   useEffect(() => {
+    if (atBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
+    }
+  }, [items, isStreaming]);
+
+  const jumpToLatest = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items]);
+    atBottomRef.current = true;
+    setAtBottom(true);
+  };
 
   return (
     <div className="flex flex-col h-full bg-background">
       <ChatHeader
         sessionFile={sessionFile}
         sessionName={sessionName}
-        currentModel={currentModel}
-        thinkingLevel={thinkingLevel}
         isStreaming={isStreaming}
         filters={filters}
         onFiltersChange={setFilters}
       />
+      <ChatTabs />
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {items.length === 0 ? (
-          // Empty state: full-width + full-height so items-center/justify-center
-          // actually centers in both axes. Kept outside the 70% column wrapper
-          // because that wrapper is content-height (no slack to vertically
-          // center within).
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <Terminal className="w-12 h-12 mb-4 opacity-50" />
-            <p className="text-sm">Start a conversation with your AI assistant</p>
-            <p className="text-xs mt-2">Type a message and press Enter to begin</p>
-          </div>
-        ) : (
-          /* Center the conversation in the shared chat column (see .chat-column). */
-          <div className="chat-column space-y-3">
-            {items
-              .filter((item) => isItemVisible(item, filters))
-              .map((item) => (
-                <ItemView key={item.id} item={item} filters={filters} />
-              ))}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
+      <div className="relative flex-1 flex flex-col overflow-hidden">
+        <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto p-4">
+          {items.length === 0 ? (
+            // Empty state: full-width + full-height so items-center/justify-center
+            // actually centers in both axes. Kept outside the 70% column wrapper
+            // because that wrapper is content-height (no slack to vertically
+            // center within).
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+              <Terminal className="w-12 h-12 mb-4 opacity-50" />
+              <p className="text-sm">Start a conversation with your AI assistant</p>
+              <p className="text-xs mt-2">Type a message and press Enter to begin</p>
+            </div>
+          ) : (
+            /* Center the conversation in the shared chat column (see .chat-column). */
+            <div className="chat-column space-y-3">
+              {items
+                .filter((item) => isItemVisible(item, filters))
+                .map((item) => (
+                  <ItemView key={item.id} item={item} filters={filters} />
+                ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
       </div>
 
-      <Composer />
+      <Composer atBottom={atBottom} onScrollToBottom={jumpToLatest} />
     </div>
+  );
+}
+
+/** Anthropic usage: 5-hour + weekly windows, e.g. "5h 8% / W 2%". */
+function UsageIndicator() {
+  const { data } = useUsage();
+  // SWR's cache is localStorage-backed (see swr-provider.tsx), so on the client
+  // `data` is already populated on the very first render while the server had
+  // none — that divergence is a hydration mismatch. Render the same placeholder
+  // the server did until after mount, then show the real (client-only) values.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const fmt = (v: number | null | undefined) => (!mounted || v == null ? "—" : `${v}%`);
+
+  // Reset-times tooltip (client-only, like the values themselves).
+  const fmtTime = (ms?: number) =>
+    ms ? new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  const fmtWhen = (ms?: number) =>
+    ms
+      ? new Date(ms).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })
+      : null;
+  const parts: string[] = [];
+  if (mounted) {
+    const fiveReset = fmtTime(data?.resetsAt?.fiveHourMs);
+    const weekReset = fmtWhen(data?.resetsAt?.weeklyMs);
+    if (fiveReset) parts.push(`5h window resets ${fiveReset}`);
+    if (weekReset) parts.push(`weekly resets ${weekReset}`);
+  }
+  const title = parts.length
+    ? parts.join(" · ")
+    : "Anthropic usage limits — rolling 5-hour and weekly windows";
+
+  return (
+    <span className="text-xs text-muted-foreground tabular-nums" title={title}>
+      5h {fmt(data?.fiveHourPct)} / W {fmt(data?.weeklyPct)}
+    </span>
   );
 }
 
 function ChatHeader({
   sessionFile,
   sessionName,
-  currentModel,
-  thinkingLevel,
   isStreaming,
   filters,
   onFiltersChange,
 }: {
   sessionFile: string | undefined;
   sessionName: string | null;
-  currentModel: { id: string; name: string; provider: string } | null;
-  thinkingLevel: string;
   isStreaming: boolean;
   filters: MessageFilters;
   onFiltersChange: (next: MessageFilters) => void;
@@ -107,38 +179,26 @@ function ChatHeader({
     <header className="h-8 border-b border-border flex items-center px-3 gap-2 shrink-0">
       <EditableTitle sessionName={sessionName} sessionFile={sessionFile} />
 
-      {/* Harness: pi.dev logo.
-          Locked to the pi.dev branding color (black) inside a white circle
-          so it reads cleanly on both light and dark backgrounds — same
-          visual treatment as a browser favicon. */}
+      {/* Harness: pi.dev logo — black glyph inside a white circle so it reads
+          cleanly on both light and dark backgrounds. The white fill is set via
+          inline style so a theme's `bg-white` override can't drop it. */}
       <span
-        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white text-black ring-1 ring-black/10"
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full text-black ring-1 ring-black/10 shrink-0"
+        style={{ backgroundColor: "#ffffff" }}
         title="Harness: Pi SDK"
         aria-label="Harness: Pi SDK"
       >
         <img src="/pi-logo.svg" alt="" className="w-2.5 h-2.5" />
       </span>
 
-      {/* Active model — between harness icon and thinking level */}
-      {currentModel ? (
-        <span
-          className="text-xs text-muted-foreground truncate max-w-[260px]"
-          title={`Model: ${currentModel.name}`}
-        >
-          {currentModel.name}
-        </span>
-      ) : (
-        <span className="text-xs text-muted-foreground italic">no model</span>
-      )}
+      {/* Anthropic usage limits (5-hour + weekly) — right after the logo */}
+      <UsageIndicator />
 
-      {/* Thinking level */}
-      <span
-        className="flex items-center gap-1 text-xs text-muted-foreground"
-        title="Thinking level"
-      >
-        <Brain className="w-3 h-3" />
-        <span className="capitalize">{thinkingLevel}</span>
-      </span>
+      {/* Model + effort — click to change (like Settings). */}
+      <div className="flex items-center gap-2 ml-3 min-w-0">
+        <ModelPicker />
+        <EffortPicker />
+      </div>
 
       <div className="flex-1" />
       {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
@@ -161,7 +221,7 @@ function EditableTitle({
   sessionName: string | null;
   sessionFile: string | undefined;
 }) {
-  const { sessionId } = useAppStore();
+  const sessionId = useAppStore((s) => s.activeSessionId);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
