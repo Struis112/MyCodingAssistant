@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type ModelInfo } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { generateId } from "@/lib/utils";
 import { agentMessagesToChatItems } from "./agentMessages";
@@ -259,6 +259,18 @@ export function useChatEvents() {
       });
     };
 
+    // Model + thinking-level are global app settings; the server broadcasts a
+    // change to every client in the session room. Apply it here (this hook is
+    // always mounted) so a second client/tab updates even when it isn't on the
+    // Settings screen — previously only Settings listened, so other views/clients
+    // never reflected the change.
+    const onModelChanged = (data: { sessionId: string; model: ModelInfo | null }) => {
+      if (data?.model) store().setCurrentModel(data.model);
+    };
+    const onThinkingChanged = (data: { sessionId: string; level: string }) => {
+      if (data?.level) store().setThinkingLevel(data.level);
+    };
+
     socket.on("chat:event", onEvent);
     socket.on("chat:done", onDone);
     socket.on("chat:error", onError);
@@ -267,6 +279,8 @@ export function useChatEvents() {
     socket.on("chat:new", onNew);
     socket.on("session:info", onInfo);
     socket.on("session:nameChanged", onNameChanged);
+    socket.on("session:modelChanged", onModelChanged);
+    socket.on("session:thinkingLevelChanged", onThinkingChanged);
 
     return () => {
       socket.off("chat:event", onEvent);
@@ -277,6 +291,8 @@ export function useChatEvents() {
       socket.off("chat:new", onNew);
       socket.off("session:info", onInfo);
       socket.off("session:nameChanged", onNameChanged);
+      socket.off("session:modelChanged", onModelChanged);
+      socket.off("session:thinkingLevelChanged", onThinkingChanged);
     };
   }, []);
 }
