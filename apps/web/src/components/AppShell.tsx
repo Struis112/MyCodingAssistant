@@ -233,6 +233,65 @@ export function AppShell() {
     }
   }, [tabOrder, activeSessionId, pendingNewTab]);
 
+  // ----- Cross-device tab sync -----
+  // The set of open (file-backed) conversations is shared via the server, so
+  // every device shows the same tabs. New empty tabs stay local until they get
+  // a session file. The server is authoritative once seeded; the first device
+  // with tabs seeds it instead of being wiped by an empty list.
+  const applyingRemoteTabs = useRef(false);
+  const syncedTabsRef = useRef(false);
+  const sharedTabsSig = useAppStore((s) =>
+    s.tabOrder
+      .map((id) => s.sessions[id])
+      .filter((x) => x?.sessionFile)
+      .map((x) => `${x!.sessionFile}\u0001${x!.name ?? ""}`)
+      .join("\u0002"),
+  );
+  useEffect(() => {
+    const socket = getSocket();
+    const localShared = () => {
+      const s = useAppStore.getState();
+      return s.tabOrder
+        .map((id) => s.sessions[id])
+        .filter((x) => x?.sessionFile)
+        .map((x) => ({ sessionFile: x!.sessionFile as string, name: x!.name }));
+    };
+    const onSync = (data: { tabs?: Array<{ sessionFile: string; name: string | null }> }) => {
+      const serverTabs = data.tabs ?? [];
+      if (serverTabs.length === 0 && localShared().length > 0) {
+        // Server empty but we have tabs → seed it (don't let an empty list wipe us).
+        syncedTabsRef.current = true;
+        socket.emit("tabs:set", { tabs: localShared() });
+        return;
+      }
+      applyingRemoteTabs.current = true;
+      useAppStore.getState().applyServerTabs(serverTabs);
+      syncedTabsRef.current = true;
+      setTimeout(() => {
+        applyingRemoteTabs.current = false;
+      }, 0);
+    };
+    const onConnect = () => socket.emit("tabs:get");
+    socket.on("tabs:sync", onSync);
+    socket.on("connect", onConnect);
+    if (socket.connected) socket.emit("tabs:get");
+    return () => {
+      socket.off("tabs:sync", onSync);
+      socket.off("connect", onConnect);
+    };
+  }, []);
+  // Push our file-backed tab list whenever it changes (after the first sync).
+  useEffect(() => {
+    if (!syncedTabsRef.current || applyingRemoteTabs.current) return;
+    if (!getSocket().connected) return;
+    const s = useAppStore.getState();
+    const tabs = s.tabOrder
+      .map((id) => s.sessions[id])
+      .filter((x) => x?.sessionFile)
+      .map((x) => ({ sessionFile: x!.sessionFile as string, name: x!.name }));
+    getSocket().emit("tabs:set", { tabs });
+  }, [sharedTabsSig]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Keyboard users can jump straight to the main content past the sidebar. */}

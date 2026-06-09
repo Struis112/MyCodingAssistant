@@ -22,6 +22,7 @@ const PRISTINE = {
       unread: false,
       currentAssistantId: null as string | null,
       title: "",
+      draft: "",
     },
   },
   tabOrder: ["default"],
@@ -162,6 +163,77 @@ describe("useAppStore", () => {
     it("never closes the last tab", () => {
       useAppStore.getState().closeTab("default");
       expect(useAppStore.getState().tabOrder).toEqual(["default"]);
+    });
+  });
+
+  describe("setDraft (per-tab composer)", () => {
+    it("stores draft text on the targeted session only", () => {
+      const other = useAppStore.getState().openTab(); // active = other
+      useAppStore.getState().setDraft("default", "hello from default");
+      useAppStore.getState().setDraft(other, "hello from other");
+      const s = useAppStore.getState();
+      expect(s.sessions.default!.draft).toBe("hello from default");
+      expect(s.sessions[other]!.draft).toBe("hello from other");
+    });
+    it("is a no-op for an unknown session id (doesn't crash or create one)", () => {
+      useAppStore.getState().setDraft("nope", "x");
+      expect(useAppStore.getState().sessions.nope).toBeUndefined();
+    });
+  });
+
+  describe("applyServerTabs (cross-device tab sync)", () => {
+    it("creates new tabs for unknown sessionFiles, preserves order, keeps the local default tab at the end", () => {
+      useAppStore.getState().applyServerTabs([
+        { sessionFile: "/s/a.jsonl", name: "A" },
+        { sessionFile: "/s/b.jsonl", name: null },
+      ]);
+      const s = useAppStore.getState();
+      const files = s.tabOrder.map((id) => s.sessions[id]!.sessionFile ?? null);
+      // Server tabs first (in order), then the local-only default tab.
+      expect(files).toEqual(["/s/a.jsonl", "/s/b.jsonl", null]);
+      // Active tab is preserved when it still exists after reconciliation.
+      expect(s.activeSessionId).toBe("default");
+    });
+
+    it("reuses existing tab ids for a known sessionFile (keeps loaded items)", () => {
+      // Seed a tab that already has the file we're about to reconcile against.
+      useAppStore.getState().setSessionFile("/s/a.jsonl");
+      useAppStore
+        .getState()
+        .addItem("default", { kind: "user", id: "u1", text: "hi", timestamp: 1 });
+      const beforeId = useAppStore.getState().activeSessionId;
+      useAppStore.getState().applyServerTabs([{ sessionFile: "/s/a.jsonl", name: "renamed" }]);
+      const s = useAppStore.getState();
+      expect(s.tabOrder).toEqual([beforeId]);
+      expect(s.sessions[beforeId]!.items.map((i) => i.id)).toEqual(["u1"]);
+      expect(s.sessions[beforeId]!.name).toBe("renamed");
+    });
+
+    it("drops file-tabs missing from the server list but keeps local-only tabs", () => {
+      // Two file-backed tabs from the server, then a local-only new tab.
+      useAppStore.getState().applyServerTabs([
+        { sessionFile: "/s/a.jsonl", name: "A" },
+        { sessionFile: "/s/b.jsonl", name: "B" },
+      ]);
+      const localOnly = useAppStore.getState().openTab(); // no sessionFile
+      // Server now reports only A.
+      useAppStore.getState().applyServerTabs([{ sessionFile: "/s/a.jsonl", name: "A" }]);
+      const s = useAppStore.getState();
+      const files = s.tabOrder.map((id) => s.sessions[id]!.sessionFile ?? null);
+      // File-tab B is dropped; local-only tabs (the original default + the new
+      // one we opened) both survive, appended after the kept file-tabs.
+      expect(files).toEqual(["/s/a.jsonl", null, null]);
+      expect(s.tabOrder).toContain(localOnly);
+      expect(s.tabOrder).toContain("default");
+    });
+
+    it("falls back to a default tab when the server list is empty and nothing local remains", () => {
+      useAppStore.getState().setSessionFile("/s/a.jsonl"); // turn the default tab into a file-tab
+      useAppStore.getState().applyServerTabs([]);
+      const s = useAppStore.getState();
+      expect(s.tabOrder).toEqual(["default"]);
+      expect(s.sessions.default!.sessionFile).toBeUndefined();
+      expect(s.activeSessionId).toBe("default");
     });
   });
 

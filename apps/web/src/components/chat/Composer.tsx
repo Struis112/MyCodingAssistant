@@ -43,7 +43,12 @@ export function Composer({
   const isStreaming = useAppStore((s) => s.sessions[s.activeSessionId]?.isStreaming ?? false);
   const sessionFile = useAppStore((s) => s.sessions[s.activeSessionId]?.sessionFile);
 
-  const [input, setInput] = useState("");
+  // The composer draft is stored PER TAB, so switching tabs keeps each tab's
+  // typed-but-unsent text (pre-type in one tab while another finishes).
+  const input = useAppStore((s) => s.sessions[s.activeSessionId]?.draft ?? "");
+  const setDraft = useAppStore((s) => s.setDraft);
+  const setInput = useCallback((text: string) => setDraft(sessionId, text), [sessionId, setDraft]);
+
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -220,7 +225,7 @@ export function Composer({
     setInput("");
     setPendingFiles([]);
     inputRef.current?.focus();
-  }, [input, pendingFiles, sendMessage, addItem, sessionId]);
+  }, [input, pendingFiles, sendMessage, addItem, sessionId, setInput]);
 
   // Right-click the send/queue button to instantly send "Continue" without
   // clobbering whatever is currently in the textarea.

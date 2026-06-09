@@ -86,6 +86,8 @@ export interface SessionState {
   /** Tab label derived from the first user message (computed once, not per
    *  token — keeps the tab bar cheap during streaming). */
   title: string;
+  /** Per-tab composer draft, so switching tabs doesn't move your typed text. */
+  draft: string;
 }
 
 function emptySession(id: string, name: string | null = null, sessionFile?: string): SessionState {
@@ -93,6 +95,7 @@ function emptySession(id: string, name: string | null = null, sessionFile?: stri
     id,
     name,
     sessionFile,
+    draft: "",
     items: [],
     isStreaming: false,
     unread: false,
@@ -221,6 +224,10 @@ interface AppState {
   renameTab: (id: string, name: string | null) => void;
   /** Drag-reorder: move `draggedId` to the position of `targetId`. */
   moveTab: (draggedId: string, targetId: string) => void;
+  /** Per-tab composer draft text. */
+  setDraft: (sid: string, text: string) => void;
+  /** Reconcile local tabs with the server's shared (cross-device) tab list. */
+  applyServerTabs: (tabs: Array<{ sessionFile: string; name: string | null }>) => void;
   hydrateTabs: (tabs: ChatTab[], activeId: string) => void;
 
   // Persisted session list (server returns these on `chat:list`).
@@ -387,6 +394,42 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { tabOrder: order };
     });
     persistFromState(get());
+  },
+
+  setDraft: (sid, text) => set((s) => patchSession(s, sid, { draft: text })),
+
+  applyServerTabs: (serverTabs) => {
+    set((s) => {
+      const sessions = { ...s.sessions };
+      const order: string[] = [];
+      // Map each shared (file-backed) tab to a local tab, reusing the existing
+      // one for that file (keeps its id + loaded items) or creating it.
+      for (const st of serverTabs) {
+        let id = s.tabOrder.find((tid) => sessions[tid]?.sessionFile === st.sessionFile);
+        if (!id) {
+          id = generateId();
+          sessions[id] = emptySession(id, st.name ?? null, st.sessionFile);
+        } else if (st.name != null && sessions[id]!.name !== st.name) {
+          sessions[id] = { ...sessions[id]!, name: st.name };
+        }
+        if (!order.includes(id)) order.push(id);
+      }
+      // Keep this device's local-only tabs (new, no file yet) at the end.
+      for (const tid of s.tabOrder) {
+        if (!order.includes(tid) && !sessions[tid]?.sessionFile) order.push(tid);
+      }
+      // Drop file-tabs that were closed on another device.
+      for (const tid of Object.keys(sessions)) {
+        if (!order.includes(tid)) delete sessions[tid];
+      }
+      let activeSessionId = order.includes(s.activeSessionId) ? s.activeSessionId : order[0];
+      if (!activeSessionId) {
+        activeSessionId = "default";
+        sessions[activeSessionId] = sessions[activeSessionId] ?? emptySession(activeSessionId);
+        order.push(activeSessionId);
+      }
+      return { sessions, tabOrder: order, activeSessionId };
+    });
   },
 
   hydrateTabs: (tabs, activeId) => {

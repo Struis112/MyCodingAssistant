@@ -5,7 +5,7 @@
 
 import express from "express";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
@@ -331,8 +331,43 @@ function getWebBuildId(): string | null {
     return null;
   }
 }
+// Shared, cross-device tab list (which conversations are open + their order).
+// Persisted so it survives restarts and broadcast so every device shows the
+// same tabs. Only file-backed conversations are shared; brand-new empty tabs
+// stay local to a device until their first message creates a session file.
+type SharedTab = { sessionFile: string; name: string | null };
+const SHARED_TABS_PATH = path.join(PROJECT_ROOT, "logs", "mca-tabs.json");
+let sharedTabs: SharedTab[] = (() => {
+  try {
+    const raw = JSON.parse(readFileSync(SHARED_TABS_PATH, "utf8"));
+    return Array.isArray(raw) ? (raw as SharedTab[]) : [];
+  } catch {
+    return [];
+  }
+})();
+function saveSharedTabs(): void {
+  try {
+    mkdirSync(path.dirname(SHARED_TABS_PATH), { recursive: true });
+    writeFileSync(SHARED_TABS_PATH, JSON.stringify(sharedTabs));
+  } catch (err) {
+    console.error("[tabs] could not persist shared tabs:", err);
+  }
+}
+
 io.on("connection", (socket) => {
   socket.emit("app:version", { buildId: getWebBuildId() });
+  // Send the current shared tab list on connect.
+  socket.emit("tabs:sync", { tabs: sharedTabs });
+  socket.on("tabs:get", () => socket.emit("tabs:sync", { tabs: sharedTabs }));
+  socket.on("tabs:set", (data: { tabs?: SharedTab[] }) => {
+    if (!Array.isArray(data?.tabs)) return;
+    sharedTabs = data.tabs
+      .filter((t) => t && typeof t.sessionFile === "string")
+      .map((t) => ({ sessionFile: t.sessionFile, name: t.name ?? null }));
+    saveSharedTabs();
+    // Broadcast to OTHER devices (the sender already has this state).
+    socket.broadcast.emit("tabs:sync", { tabs: sharedTabs });
+  });
 });
 
 registerWebSocketHandlers(io, piSessionManager);
