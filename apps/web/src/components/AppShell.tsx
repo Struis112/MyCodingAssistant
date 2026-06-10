@@ -301,7 +301,9 @@ export function AppShell() {
       >
         Skip to content
       </a>
-      {!isConnected && everConnected.current && (
+      {/* Floating pill only outside the chat view — the chat header shows its
+          own "Reconnecting…" in the top-right corner (one calm signal, not two). */}
+      {!isConnected && everConnected.current && activeView !== "chat" && (
         <output
           aria-live="polite"
           className="fixed top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full border border-warning/40 bg-warning/10 px-3 py-1 text-xs font-medium text-warning shadow-sm"

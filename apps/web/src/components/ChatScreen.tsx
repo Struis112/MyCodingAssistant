@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { Terminal } from "lucide-react";
+import { Loader2, Terminal } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useShallow } from "zustand/react/shallow";
 import { getSocket } from "@/lib/socket";
@@ -240,6 +240,30 @@ function UsageIndicator() {
   );
 }
 
+/**
+ * Connection indicator for the header's top-right corner. "Reconnecting…"
+ * (socket down, after having been connected once) takes priority over the
+ * streaming pulse — a dead pipe matters more than an active one.
+ */
+function ConnectionStatus({ isStreaming }: { isStreaming: boolean }) {
+  const isConnected = useAppStore((s) => s.isConnected);
+  const everConnected = useRef(false);
+  if (isConnected) everConnected.current = true;
+
+  if (!isConnected && everConnected.current) {
+    return (
+      <output aria-live="polite" className="flex items-center gap-1.5 text-xs text-warning">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        Reconnecting…
+      </output>
+    );
+  }
+  if (isStreaming) {
+    return <span className="text-xs text-warning animate-pulse">● Streaming...</span>;
+  }
+  return null;
+}
+
 function ChatHeader({
   sessionFile,
   sessionName,
@@ -283,7 +307,7 @@ function ChatHeader({
       <div className="flex-1 min-w-0 flex items-center pl-3">
         <ClaudeStatus className="w-1/2 min-w-0" />
       </div>
-      {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
+      <ConnectionStatus isStreaming={isStreaming} />
       <MessageFilterMenu filters={filters} onChange={onFiltersChange} />
     </header>
   );
