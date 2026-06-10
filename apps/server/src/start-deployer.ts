@@ -269,6 +269,7 @@ function makeComposedStore(): KnownGoodStore {
       // both children in the same order they were activated (API first, web
       // second) so the web restart picks up the rolled-back server contract.
       await git.rollback();
+      void postHealing("rolled-back", "Deploy failed verification — rolled back to known-good.");
       if (INCLUDE_API) {
         await rebuildAndRestartApi().catch((e) => log(`rollback API warning: ${String(e)}`));
       }
@@ -468,6 +469,19 @@ const chatRoutedRepair: RepairAgent = {
   },
 };
 
+/** Best-effort: record a self-healing event on the API's visible feed. */
+async function postHealing(kind: string, message: string): Promise<void> {
+  try {
+    await postJsonWithRetry<{ ok: true }>(
+      "/api/healing-events",
+      { source: "deploy", kind, message },
+      10_000,
+    );
+  } catch {
+    /* feed is observability only — never fail a deploy over it */
+  }
+}
+
 async function notifyParked(
   result: { attempts: number; parkedReason?: string },
   liveSha: string | undefined,
@@ -533,7 +547,15 @@ async function runDeploy(sha: string): Promise<void> {
     persistJournal(result);
     if (result.outcome === "promoted") {
       log(`PROMOTED after ${result.attempts} attempt(s).`);
+      void postHealing(
+        "promoted",
+        `Deploy of ${sha.slice(0, 8)} promoted after ${result.attempts} attempt(s).`,
+      );
     } else {
+      void postHealing(
+        "parked",
+        `Deploy of ${sha.slice(0, 8)} parked (${result.parkedReason}) — live stayed on known-good.`,
+      );
       // PARK: live is on known-good; journal preserved for the human to resume.
       log(
         `PARKED (${result.parkedReason}) after ${result.attempts} attempt(s). ` +
@@ -559,6 +581,10 @@ function main(): void {
   const trigger = new CommitTrigger({
     repoDir: REPO_DIR,
     ref: STAGING_REF,
+    // Coalesce commit bursts (the repair agent often lands several commits in
+    // a row): wait until staging has been quiet for QUIET_MS, then deploy the
+    // latest sha once — one service bounce per burst instead of per commit.
+    quietMs: parseInt(process.env.MCA_DEPLOY_QUIET_MS || "90000", 10),
     onCommit: (sha) => void runDeploy(sha),
   });
   trigger.start();

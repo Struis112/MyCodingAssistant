@@ -238,11 +238,22 @@ export function useChatEvents() {
       sessionFile?: string;
       name?: string | null;
       messages?: RawMessage[];
+      history?: { offset: number; total: number };
     }) => {
       const s = store();
       s.setSessionFileFor(data.sessionId, data.sessionFile);
       s.renameTab(data.sessionId, data.name ?? null);
       s.setItems(data.sessionId, agentMessagesToChatItems(data.messages || []));
+      s.setHistoryOffset(data.sessionId, data.history?.offset ?? 0);
+    };
+
+    // An older history window arrived (user clicked "Show earlier"): convert
+    // and prepend ahead of the current items; the new offset re-arms the button.
+    const onHistory = (data: { sessionId: string; messages?: RawMessage[]; offset?: number }) => {
+      const items = agentMessagesToChatItems(data.messages || []);
+      if (items.length > 0 || (data.offset ?? 0) === 0) {
+        store().prependItems(data.sessionId, items, data.offset ?? 0);
+      }
     };
 
     const onState = (data: {
@@ -252,6 +263,7 @@ export function useChatEvents() {
         name?: string | null;
         isStreaming?: boolean;
         messages?: RawMessage[];
+        history?: { offset: number; total: number };
       };
     }) => {
       const st = data.state;
@@ -268,6 +280,7 @@ export function useChatEvents() {
       // full saved detail of what happened is shown.
       if (!haveItems || st.isStreaming === false) {
         s.setItems(data.sessionId, agentMessagesToChatItems(msgs));
+        s.setHistoryOffset(data.sessionId, st.history?.offset ?? 0);
         s.setStreaming(data.sessionId, !!st.isStreaming);
         if (!st.isStreaming) s.setCurrentAssistantId(data.sessionId, null);
       }
@@ -314,6 +327,7 @@ export function useChatEvents() {
     socket.on("chat:error", onError);
     socket.on("chat:resumed", onResumed);
     socket.on("chat:state:result", onState);
+    socket.on("chat:history:result", onHistory);
     socket.on("chat:new", onNew);
     socket.on("session:info", onInfo);
     socket.on("session:nameChanged", onNameChanged);
@@ -327,6 +341,7 @@ export function useChatEvents() {
       socket.off("chat:error", onError);
       socket.off("chat:resumed", onResumed);
       socket.off("chat:state:result", onState);
+      socket.off("chat:history:result", onHistory);
       socket.off("chat:new", onNew);
       socket.off("session:info", onInfo);
       socket.off("session:nameChanged", onNameChanged);

@@ -23,6 +23,7 @@ const PRISTINE = {
       currentAssistantId: null as string | null,
       title: "",
       draft: "",
+      historyOffset: 0,
     },
   },
   tabOrder: ["default"],

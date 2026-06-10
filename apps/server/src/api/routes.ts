@@ -7,6 +7,7 @@ import path from "node:path";
 import type { Express } from "express";
 import type { ConnectorManager } from "../connectors/types.js";
 import { parseUnifiedPatch, resolveWithinRoot, reverseApply } from "../services/revert.js";
+import { getModelHealth } from "../services/model-health.js";
 
 /** Best-effort Content-Type from a file extension (for /api/files/raw). */
 const CONTENT_TYPES: Record<string, string> = {
@@ -302,7 +303,11 @@ export function registerApiRoutes(
   app.get("/api/models", async (_req, res) => {
     try {
       const models = await piSessionManager.getAvailableModels();
-      res.json(models);
+      // Hide quarantined models: ids that repeatedly returned EMPTY replies at
+      // runtime (offered upstream, but not actually served). Evidence-based —
+      // a model that produces content again is automatically un-hidden.
+      const health = getModelHealth();
+      res.json(models.filter((m) => !health.isQuarantined(m.id)));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

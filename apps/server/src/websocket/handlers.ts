@@ -15,6 +15,9 @@
 
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { ConnectorManager, ThinkingLevel } from "../connectors/types.js";
+import { getModelHealth, saveModelHealth } from "../services/model-health.js";
+import { recordHealingEvent } from "../services/healing-events.js";
+import { tailWindowStart, prevWindowStart } from "./history-window.js";
 
 // Per-session unsubscribers so we can clean up when the same session is sent
 // multiple prompts.
@@ -97,10 +100,31 @@ function attachEventForwarder(
         const provider = current?.model?.provider ?? "<unset>";
         const detail = `The model returned no content (0 text / 0 thinking / 0 tool events for this turn). Active model: ${provider}/${modelId}. This usually means the model id is a registry alias the upstream provider doesn't actually serve — try a different model in Settings.`;
         console.warn(`[WS] WARN sid=${sessionId} ${detail}`);
+        // Strike against the model: after 2 consecutive empty turns it's
+        // quarantined (hidden from the picker) so nobody keeps hitting it.
+        if (modelId !== "<unset>") {
+          const newlyQuarantined = getModelHealth().recordEmpty(modelId);
+          saveModelHealth();
+          if (newlyQuarantined) {
+            recordHealingEvent({
+              source: "model-health",
+              kind: "quarantined",
+              message: `Model ${modelId} quarantined after repeated empty replies — hidden from the picker.`,
+            });
+          }
+        }
         // Tell the frontend so the user sees it in the chat as a system
         // item instead of staring at an empty assistant bubble.
         io.to(room).emit("chat:error", { sessionId, error: detail });
-      } else if (debug) {
+      } else {
+        // Productive turn — clears any strike streak for the active model.
+        const goodModel = piSessionManager.getSession(sessionId)?.model?.id;
+        if (goodModel) {
+          getModelHealth().recordGood(goodModel);
+          saveModelHealth();
+        }
+      }
+      if (!empty && debug) {
         console.log(
           `[WS] turn done sid=${sessionId} text=${counts.text} thinking=${counts.thinking} tools=${counts.toolStart}/${counts.toolEnd}`,
         );
@@ -269,12 +293,16 @@ export function registerWebSocketHandlers(
         await piSessionManager.resumeSession(data.sessionId, data.sessionFile);
         attachEventForwarder(io, piSessionManager, data.sessionId);
         const session = piSessionManager.getSession(data.sessionId)!;
+        // Windowed: send only the tail (last ~5 user turns). The client asks
+        // for earlier windows via chat:history when the user scrolls up.
+        const resumeStart = tailWindowStart(session.messages);
         io.to(room).emit("chat:resumed", {
           sessionId: data.sessionId,
           sessionFile: session.sessionFile,
           piSessionId: session.sessionId,
           name: session.sessionName ?? null,
-          messages: session.messages,
+          messages: session.messages.slice(resumeStart),
+          history: { offset: resumeStart, total: session.messages.length },
         });
       } catch (err) {
         io.to(room).emit("chat:error", { sessionId: data.sessionId, error: String(err) });
@@ -367,8 +395,32 @@ export function registerWebSocketHandlers(
             : null,
           thinkingLevel: session.thinkingLevel,
           isStreaming: session.isStreaming,
-          messages: session.messages,
+          // Windowed tail — a 900-message session must not be re-shipped on
+          // every reconnect/tab switch. offset/total let the client page back.
+          messages: session.messages.slice(tailWindowStart(session.messages)),
+          history: {
+            offset: tailWindowStart(session.messages),
+            total: session.messages.length,
+          },
         },
+      });
+    });
+
+    // Earlier history on demand: returns the window of ~5 user turns that
+    // precedes message index `before` (the client's current window start).
+    socket.on("chat:history", (data: { sessionId: string; before: number }) => {
+      const session = piSessionManager.getSession(data.sessionId);
+      if (!session) {
+        socket.emit("chat:history:result", { sessionId: data.sessionId, messages: [], offset: 0 });
+        return;
+      }
+      const msgs = session.messages;
+      const before = Math.max(0, Math.min(Math.floor(data.before ?? 0), msgs.length));
+      const start = prevWindowStart(msgs, before);
+      socket.emit("chat:history:result", {
+        sessionId: data.sessionId,
+        messages: msgs.slice(start, before),
+        offset: start,
       });
     });
 

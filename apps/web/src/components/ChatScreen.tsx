@@ -40,18 +40,20 @@ const INITIAL_WINDOW = 150;
 const WINDOW_STEP = 500;
 
 export function ChatScreen() {
-  const { items, sessionFile, sessionName, isStreaming, activeSessionId } = useAppStore(
-    useShallow((s) => {
-      const a = s.sessions[s.activeSessionId];
-      return {
-        items: a?.items ?? EMPTY_ITEMS,
-        sessionFile: a?.sessionFile,
-        sessionName: a?.name ?? null,
-        isStreaming: a?.isStreaming ?? false,
-        activeSessionId: s.activeSessionId,
-      };
-    }),
-  );
+  const { items, sessionFile, sessionName, isStreaming, activeSessionId, historyOffset } =
+    useAppStore(
+      useShallow((s) => {
+        const a = s.sessions[s.activeSessionId];
+        return {
+          items: a?.items ?? EMPTY_ITEMS,
+          sessionFile: a?.sessionFile,
+          sessionName: a?.name ?? null,
+          isStreaming: a?.isStreaming ?? false,
+          activeSessionId: s.activeSessionId,
+          historyOffset: a?.historyOffset ?? 0,
+        };
+      }),
+    );
 
   const [filters, setFilters] = useState<MessageFilters>({
     assistant: true,
@@ -121,14 +123,28 @@ export function ChatScreen() {
   }, [activeSessionId]);
 
   // After loading older messages, keep the viewport anchored (no jump to top).
+  // Consumed only once the list actually got taller — a server-history fetch
+  // resolves async, so the anchor must survive until those items render.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const p = pendingPrependRef.current;
-    if (el && p) {
+    if (el && p && el.scrollHeight !== p.prevHeight) {
       el.scrollTop = p.prevTop + (el.scrollHeight - p.prevHeight);
       pendingPrependRef.current = null;
     }
-  }, [windowSize]);
+  }, [windowSize, items]);
+
+  // Fetch the previous server-side history window (~5 user turns). The reply
+  // (chat:history:result) prepends into the store; windowSize grows so the
+  // newly-loaded items are actually visible.
+  const loadEarlier = () => {
+    const el = scrollRef.current;
+    if (el && !pendingPrependRef.current) {
+      pendingPrependRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+    }
+    setWindowSize((w) => w + WINDOW_STEP);
+    getSocket().emit("chat:history", { sessionId: activeSessionId, before: historyOffset });
+  };
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -161,6 +177,17 @@ export function ChatScreen() {
                 <div className="text-center py-2 text-xs text-muted-foreground select-none">
                   Showing the latest {visibleItems.length} messages · scroll up to load{" "}
                   {Math.min(WINDOW_STEP, hiddenCount)} older
+                </div>
+              )}
+              {hiddenCount === 0 && historyOffset > 0 && (
+                <div className="text-center py-2">
+                  <button
+                    type="button"
+                    onClick={loadEarlier}
+                    className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  >
+                    Show earlier conversation ({historyOffset} earlier messages)
+                  </button>
                 </div>
               )}
               {visibleItems.map((item) => (

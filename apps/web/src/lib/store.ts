@@ -88,6 +88,9 @@ export interface SessionState {
   title: string;
   /** Per-tab composer draft, so switching tabs doesn't move your typed text. */
   draft: string;
+  /** Server-side message index where the loaded window starts. > 0 means
+   *  earlier history exists and can be fetched (chat:history). */
+  historyOffset: number;
 }
 
 function emptySession(id: string, name: string | null = null, sessionFile?: string): SessionState {
@@ -96,6 +99,7 @@ function emptySession(id: string, name: string | null = null, sessionFile?: stri
     name,
     sessionFile,
     draft: "",
+    historyOffset: 0,
     items: [],
     isStreaming: false,
     unread: false,
@@ -205,6 +209,9 @@ interface AppState {
   findToolItemByCallId: (sid: string, toolCallId: string) => ChatItem | undefined;
   clearItems: (sid: string) => void;
   setItems: (sid: string, items: ChatItem[]) => void;
+  setHistoryOffset: (sid: string, offset: number) => void;
+  /** Prepend an older history window (loaded on demand) ahead of current items. */
+  prependItems: (sid: string, items: ChatItem[], offset: number) => void;
   setStreaming: (sid: string, streaming: boolean) => void;
   setCurrentAssistantId: (sid: string, id: string | null) => void;
   getCurrentAssistantId: (sid: string) => string | null;
@@ -300,6 +307,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   findToolItemByCallId: (sid, toolCallId) =>
     get().sessions[sid]?.items.find((it) => it.kind === "tool" && it.toolCallId === toolCallId),
   clearItems: (sid) => set((s) => patchSession(s, sid, { items: [] })),
+  setHistoryOffset: (sid, offset) => set((s) => patchSession(s, sid, { historyOffset: offset })),
+  prependItems: (sid, items, offset) =>
+    set((s) => {
+      const ses = s.sessions[sid];
+      if (!ses) return s;
+      return patchSession(s, sid, {
+        items: [...items, ...ses.items],
+        historyOffset: offset,
+      });
+    }),
   setItems: (sid, items) =>
     set((s) => patchSession(s, sid, { items, title: titleFromItems(items) })),
   setStreaming: (sid, streaming) => set((s) => patchSession(s, sid, { isStreaming: streaming })),

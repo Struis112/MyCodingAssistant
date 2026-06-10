@@ -27,6 +27,7 @@ import {
 import type { ServiceStatus } from "./services/service-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { getClaudeStatus } from "./services/claude-status.js";
+import { listHealingEvents, recordHealingEvent } from "./services/healing-events.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 import { createCfAccessMiddleware, readCfAccessConfigFromEnv } from "./api/cf-access.js";
 import { installCfAccessSocketGuard } from "./websocket/cf-access-guard.js";
@@ -197,6 +198,31 @@ app.get("/health", (_req, res) => {
 // ----- Claude status (status.claude.com history feed, last 48h, cached) -----
 app.get("/api/claude-status", async (_req, res) => {
   res.json(await getClaudeStatus());
+});
+
+// ----- Self-healing event feed -----
+// GET is public (Services screen). POST is for the deployer process (separate
+// failure domain) and requires the shared deploy token.
+app.get("/api/healing-events", (_req, res) => {
+  res.json({ events: listHealingEvents() });
+});
+app.post("/api/healing-events", (req, res) => {
+  const token = req.header("x-mca-deploy-token");
+  if (!token || token !== resolveDeployToken({ repoDir: PROJECT_ROOT })) {
+    res.status(401).json({ error: "bad deploy token" });
+    return;
+  }
+  const { source, kind, message } = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof source !== "string" || typeof kind !== "string" || typeof message !== "string") {
+    res.status(400).json({ error: "source, kind, message (strings) required" });
+    return;
+  }
+  recordHealingEvent({
+    source: source.slice(0, 40),
+    kind: kind.slice(0, 40),
+    message: message.slice(0, 500),
+  });
+  res.json({ ok: true });
 });
 
 // ----- Account usage (Anthropic 5-hour + weekly limits) -----
@@ -541,7 +567,15 @@ watchdog.start();
 if (process.env.MCA_WATCH_SAFE === "1") {
   const serverDir = path.resolve(HERE, "..");
   const stopWatchSafe = startWatchSafe({
-    watchDirs: [path.join(serverDir, "src")],
+    // Watch DIST, not src: in hybrid mode the process runs from dist, so a
+    // src change alone (e.g. the repair agent committing) doesn't change what
+    // we serve — restarting on it just bounced the API for nothing (and the
+    // deployer bounces again after ITS build = double restart per commit).
+    // dist only changes when something actually builds new code; deploy-built
+    // dist changes are covered by the bounce-lock abstain below, manual
+    // `npm run build` changes get the restart they intend.
+    watchDirs: [path.join(serverDir, "dist")],
+    debounceMs: 2_500, // a tsc emit writes many files; settle before reacting
     activeTurns: () => {
       // Count sessions currently streaming a reply. ConnectorManager has
       // listActiveSessions(); duck-typed to avoid widening the interface for
@@ -577,6 +611,11 @@ if (process.env.MCA_WATCH_SAFE === "1") {
     },
     onRestart: () => {
       console.log("[watch-safe] graceful restart — exiting so the supervisor relaunches");
+      recordHealingEvent({
+        source: "watch-safe",
+        kind: "restart",
+        message: "New server build detected — graceful restart once idle (no reply was cut off).",
+      });
       // Same shutdown path as a SIGTERM — closes sockets, stops child services,
       // then exits 0. The OS service manager restarts us.
       void shutdown();

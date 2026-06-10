@@ -123,9 +123,86 @@ export function ServicesView() {
             {services.map((svc) => (
               <ServiceCard key={svc.name} svc={svc} />
             ))}
+            <HealingFeed />
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ----- self-healing event feed -----
+
+interface HealingEvent {
+  at: number;
+  source: string;
+  kind: string;
+  message: string;
+}
+
+function timeAgo(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+/**
+ * Recent self-healing actions (deploy promote/rollback/park, watch-safe
+ * restarts, model quarantine). Makes "is self-healing doing anything?"
+ * answerable at a glance. Newest first; quiet when there's nothing.
+ */
+function HealingFeed() {
+  const [events, setEvents] = useState<HealingEvent[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch(`${SERVER_URL}/api/healing-events`);
+        if (r.ok && alive) setEvents(((await r.json()) as { events: HealingEvent[] }).events ?? []);
+      } catch {
+        /* unreachable — keep last list */
+      }
+    };
+    load();
+    const id = setInterval(load, 10_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  return (
+    <div className="border border-border rounded-lg p-4 bg-card">
+      <div className="flex items-center gap-2 mb-2">
+        <h2 className="text-sm font-semibold text-foreground">Self-healing events</h2>
+        <span className="text-xs text-muted-foreground">last {events.length}</span>
+      </div>
+      {events.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Nothing yet — events appear here when the system restarts, rolls back, or quarantines
+          something on its own.
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {events.slice(0, 20).map((e, i) => (
+            <li key={`${e.at}-${i}`} className="flex items-start gap-2 text-xs">
+              <span className="shrink-0 mt-0.5 px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">
+                {e.source}
+              </span>
+              <span className="text-foreground min-w-0">{e.message}</span>
+              <span
+                className="ml-auto shrink-0 text-muted-foreground"
+                title={new Date(e.at).toLocaleString()}
+              >
+                {timeAgo(e.at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
