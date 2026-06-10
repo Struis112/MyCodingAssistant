@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { ThemeProvider, THEME_COOKIE, type Theme } from "@/lib/theme";
-import { FontProvider, FONT_COOKIE, FONT_CLASS, parseFontChoice } from "@/lib/font";
+import { FontProvider } from "@/lib/font";
+// Imported from font-shared (NO "use client") so the server component
+// below can call parseFontChoice without Next.js treating it as a
+// cross-boundary client invocation. See font-shared.ts for the rationale.
+import { FONT_COOKIE, FONT_CLASS, parseFontChoice } from "@/lib/font-shared";
 import { SWRProvider } from "@/lib/swr-provider";
 import "@/styles/globals.css";
 

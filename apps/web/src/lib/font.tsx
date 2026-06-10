@@ -1,34 +1,20 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-
-/** Selectable mono fonts (self-hosted; see styles/globals.css). */
-export type FontChoice = "miosevka" | "jetbrains" | "nerdfont";
-
-export const FONT_CHOICES: { id: FontChoice; label: string; description: string }[] = [
-  { id: "miosevka", label: "Miosevka", description: "Curly Iosevka, sans serifs — the default" },
-  { id: "jetbrains", label: "JetBrains Mono", description: "Familiar, wide coding mono" },
-  {
-    id: "nerdfont",
-    label: "JetBrains Mono Nerd Font",
-    description: "Coding ligatures + Nerd Font icon glyphs",
-  },
-];
-
-/** Parse a cookie/localStorage value into a known FontChoice (Miosevka default). */
-export function parseFontChoice(value: string | null | undefined): FontChoice {
-  return value === "jetbrains" || value === "nerdfont" ? value : "miosevka";
-}
-
-/** Cookie the server reads in layout.tsx to stamp the font class on <html>. */
-export const FONT_COOKIE = "mca-font";
-
-/** Class added to <html> per choice. Miosevka is the CSS default → no class. */
-export const FONT_CLASS: Record<FontChoice, string> = {
-  miosevka: "",
-  jetbrains: "font-jetbrains",
-  nerdfont: "font-nerd",
-};
+// Server-safe primitives live in font-shared.ts (no "use client") so the
+// root layout — a server component — can call parseFontChoice() without
+// tripping the Next.js "client function called from server" guard. We
+// re-export them here so existing client code that imports from
+// "@/lib/font" keeps working unchanged.
+import {
+  FONT_CHOICES,
+  FONT_CLASS,
+  FONT_COOKIE,
+  parseFontChoice,
+  type FontChoice,
+} from "./font-shared";
+export { FONT_CHOICES, FONT_CLASS, FONT_COOKIE, parseFontChoice };
+export type { FontChoice };
 
 interface FontContextType {
   font: FontChoice;
