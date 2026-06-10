@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  * Quiet Claude-status ticker for the header. Renders nothing unless there's a
  * status update within the last 48h (the server filters that). When the text is
  * wider than its slot it scrolls (marquee); otherwise it sits still. The slot is
- * sized by the caller (~40% of the leftover header space) and this fills it.
+ * sized by the caller (~50% of the leftover header space) and this fills it.
  */
 export function ClaudeStatus({ className }: { className?: string }) {
   const { data } = useClaudeStatus();

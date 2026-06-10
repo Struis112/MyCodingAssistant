@@ -251,10 +251,10 @@ function ChatHeader({
         <EffortPicker />
       </div>
 
-      {/* Leftover space after the controls. The Claude-status ticker takes ~40%
+      {/* Leftover space after the controls. The Claude-status ticker takes ~50%
           of it (auto-shrinks on narrow screens) and shows only when relevant. */}
       <div className="flex-1 min-w-0 flex items-center pl-3">
-        <ClaudeStatus className="w-2/5 min-w-0" />
+        <ClaudeStatus className="w-1/2 min-w-0" />
       </div>
       {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
       <MessageFilterMenu filters={filters} onChange={onFiltersChange} />
