@@ -6,8 +6,11 @@
   /* Shared centered conversation column. Used by both the message list and
      the composer so they always share the same width. Change it here once. */
   .chat-column {
-    /* 60% wide, centered → 20% free space on each side. */
-    @apply mx-auto w-[60%];
+    /* Responsive, mobile-first. Near-full width on phones (gutters would just
+       waste space), narrowing to the preferred 60% (20% gutters per side) on
+       normal desktop monitors, with a max-width cap so lines stay readable on
+       ultrawide displays. */
+    @apply mx-auto w-[92%] max-w-[1400px] md:w-[82%] lg:w-[72%] xl:w-[60%];
   }
 }
 
