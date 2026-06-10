@@ -177,20 +177,23 @@ if ($existing) {
     Write-Host "Existing service '$ServiceName' found ($($existing.Status)) -- removing..."
 
     # Stop first (best effort). Stop-Service handles both NSSM and sc.exe
-    # registrations because it just talks to the SCM.
+    # registrations because it just talks to the SCM. NSSM also gets a stop
+    # call for its wrapped child. Both are wrapped in try/catch because under
+    # `$ErrorActionPreference = "Stop"` a NativeCommandError from NSSM (e.g.
+    # "service not started") would otherwise abort the whole install — which
+    # is exactly what bit us when reinstalling on top of a recently-stopped
+    # service.
     if ($existing.Status -ne "Stopped") {
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        # NSSM-managed services sometimes need NSSM stop too to clean up the
-        # wrapped child process; harmless on sc.exe-only services.
-        & $Nssm stop $ServiceName confirm 2>$null | Out-Null
+        try { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue } catch { }
+        try { & $Nssm stop $ServiceName confirm 2>&1 | Out-Null } catch { }
         Start-Sleep -Seconds 2
     }
 
     # Try NSSM remove. Capture its exit code rather than relying on
     # $ErrorActionPreference, because NSSM writes its diagnostics on stderr
     # and exits non-zero on "not managed by this NSSM" without throwing a
-    # PowerShell exception.
-    & $Nssm remove $ServiceName confirm 2>$null | Out-Null
+    # PowerShell exception. Wrap in try/catch for the same reason as above.
+    try { & $Nssm remove $ServiceName confirm 2>&1 | Out-Null } catch { }
     $removeExit = $LASTEXITCODE
 
     Start-Sleep -Seconds 1

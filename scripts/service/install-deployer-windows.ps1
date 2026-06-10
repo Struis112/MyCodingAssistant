@@ -102,11 +102,13 @@ $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Existing service '$ServiceName' found ($($existing.Status)) -- removing..."
     if ($existing.Status -ne "Stopped") {
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        & $Nssm stop $ServiceName confirm 2>$null | Out-Null
+        # Wrapped in try/catch so a harmless NSSM "not started" NativeCommandError
+        # under $ErrorActionPreference=Stop doesn't abort the whole reinstall.
+        try { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue } catch { }
+        try { & $Nssm stop $ServiceName confirm 2>&1 | Out-Null } catch { }
         Start-Sleep -Seconds 2
     }
-    & $Nssm remove $ServiceName confirm 2>$null | Out-Null
+    try { & $Nssm remove $ServiceName confirm 2>&1 | Out-Null } catch { }
     Start-Sleep -Seconds 1
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
         & sc.exe delete $ServiceName | Out-Null
