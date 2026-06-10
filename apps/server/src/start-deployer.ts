@@ -44,7 +44,7 @@ import {
 import { GitKnownGoodStore } from "./services/git-known-good.js";
 import { ServiceDeployPipeline } from "./services/service-deploy-pipeline.js";
 import { MultiServiceDeployPipeline } from "./services/multi-service-deploy-pipeline.js";
-import { createApiDeployPipeline } from "./services/api-deploy.js";
+import { createApiDeployPipeline, waitForApiReady } from "./services/api-deploy.js";
 import { resolveDeployToken } from "./services/deploy-token.js";
 import { acquireDeployLock } from "./services/deploy-bounce-lock.js";
 
@@ -209,6 +209,18 @@ async function rebuildAndRestartApi(): Promise<void> {
   const start = await run(NSSM_PATH, ["start", API_SERVICE_NAME], REPO_DIR);
   if (!start.ok && !/start|running|completed/i.test(stripNul(start.logs))) {
     log(`rollback API start warning: ${start.logs}`);
+  }
+  // Wait for the rolled-back API to actually serve before returning. The
+  // rollback path's next step is restartWebViaApi(), which POSTs to the API
+  // — if we don't wait, that POST hits an unready API and the rollback
+  // logs cascade with ECONNREFUSEDs. Best-effort: a missed readiness here
+  // means the API didn't come back, which we log as a warning but don't
+  // re-throw — the controller will still park live on known-good and
+  // surface the situation in the journal.
+  try {
+    await waitForApiReady({ port: API_PORT, timeoutMs: 180_000 });
+  } catch (err) {
+    log(`rollback API readiness warning: ${String(err)}`);
   }
 }
 

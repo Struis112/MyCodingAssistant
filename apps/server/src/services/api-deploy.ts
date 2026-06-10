@@ -115,6 +115,40 @@ function defaultHttpStatus(port: number, pathName: string): Promise<number | nul
   });
 }
 
+/**
+ * Reusable: poll /healthz on `port` with `intervalMs` cadence until it
+ * returns 200, or `timeoutMs` elapses. Throws with the last-seen status on
+ * timeout. Used by createApiActivatable (activate path) and also by the
+ * deployer's rollback path, which needs the same serialization guarantee
+ * before talking to /api/services/web/restart.
+ */
+export async function waitForApiReady(opts: {
+  port: number;
+  timeoutMs?: number;
+  intervalMs?: number;
+  httpStatus?: (port: number, path: string) => Promise<number | null>;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+  const intervalMs = opts.intervalMs ?? 1_000;
+  const httpStatus = opts.httpStatus ?? defaultHttpStatus;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: number | null = -1;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    const code = await httpStatus(opts.port, "/healthz");
+    if (code === 200) return;
+    lastSeen = code;
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(intervalMs);
+  }
+  throw new Error(
+    `API did not become ready within ${Math.round(timeoutMs / 1000)}s ` +
+      `(last /healthz status: ${lastSeen === null ? "no response" : lastSeen})`,
+  );
+}
+
 // ---- public factories ----
 
 /**
@@ -197,10 +231,16 @@ export function createApiActivatable(deps: ApiDeployDeps): Activatable {
   const httpStatus = deps.httpStatus ?? defaultHttpStatus;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const port = deps.apiPort;
-  // Generous on purpose: the SDK + supervised web bring-up can take a while
-  // on cold disk. Better to wait 60s for a healthy API than to roll back a
-  // perfectly good deploy because the SDK was 25s into a 30s init.
-  const readyTimeoutMs = deps.readyTimeoutMs ?? 60_000;
+  // Generous on purpose. The window has to cover:
+  //   * dev-precheck (~2.5s tsc),
+  //   * SDK + supervised web bring-up (~5-7s typical),
+  //   * NSSM crash-throttle backoff (AppRestartDelay = 5s) for any boot
+  //     attempts that exit before AppThrottle (10s) — which can stack on a
+  //     cold disk or while watch-safe is also racing.
+  // 180s = comfortable margin for 5-6 throttled boot cycles. Better to wait
+  // 3 minutes for a healthy API than to roll back a perfectly good deploy
+  // because the SDK was 25s into a 30s init.
+  const readyTimeoutMs = deps.readyTimeoutMs ?? 180_000;
   const readyProbeIntervalMs = deps.readyProbeIntervalMs ?? 1_000;
   // Tolerated NSSM stderr fragments. Match against decoded-UTF16 (Windows
   // services often emit double-byte) by stripping NUL bytes first.
@@ -224,27 +264,16 @@ export function createApiActivatable(deps: ApiDeployDeps): Activatable {
     if (isTolerable(r.logs)) return { ok: true, logs: `[tolerated] ${r.logs}` };
     return r;
   };
-  /**
-   * Poll /healthz until 200 or timeout. /healthz is intentionally minimal
-   * (no DB, no auth, no SDK call) so it answers as soon as httpServer.listen
-   * fires — a faithful "the API process is up" signal.
-   */
-  const waitForReady = async (): Promise<void> => {
-    const deadline = Date.now() + readyTimeoutMs;
-    let lastSeen: number | null = -1;
-    while (Date.now() < deadline) {
-      // eslint-disable-next-line no-await-in-loop
-      const code = await httpStatus(port, "/healthz");
-      if (code === 200) return;
-      lastSeen = code;
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(readyProbeIntervalMs);
-    }
-    throw new Error(
-      `API did not become ready within ${Math.round(readyTimeoutMs / 1000)}s ` +
-        `(last /healthz status: ${lastSeen === null ? "no response" : lastSeen})`,
-    );
-  };
+  // Delegate to the shared helper so the activate path and the rollback
+  // path use the same logic, with the same probe shape.
+  const waitForReady = (): Promise<void> =>
+    waitForApiReady({
+      port,
+      timeoutMs: readyTimeoutMs,
+      intervalMs: readyProbeIntervalMs,
+      httpStatus,
+      sleep,
+    });
 
   return {
     restart: async () => {
