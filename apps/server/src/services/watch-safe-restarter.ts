@@ -28,6 +28,18 @@ export interface RestartGateOptions {
    */
   maxWaitMs?: number;
   log?: (msg: string) => void;
+  /**
+   * Optional pre-restart guard (e.g. `tsc --noEmit`). Runs once the gate has
+   * decided to restart but BEFORE `onRestart` fires. If it returns `ok:false`
+   * the restart is aborted: the gate is re-armed so the next file change
+   * (presumably a fix) re-triggers the cycle, and the running version keeps
+   * serving. Optional `logs` are passed to the gate's `log` for the operator.
+   *
+   * This is the safety net that prevents "watch detected a save → swapped
+   * onto a broken candidate → process exits → can't recover" (the 2026-06-10
+   * incident class).
+   */
+  precheck?: () => Promise<{ ok: boolean; logs?: string }>;
 }
 
 export interface RestartGate {
@@ -51,6 +63,11 @@ export function createRestartGate(opts: RestartGateOptions): RestartGate {
   let pending = false;
   let waitStart = 0;
   let spent = false;
+  // While the precheck is in flight we ignore further `notifyChange` calls so
+  // we don't kick off a second concurrent precheck. A change that arrives
+  // *during* the precheck re-arms the gate after it finishes.
+  let precheckInFlight = false;
+  let changedDuringPrecheck = false;
 
   function tryRestart(): void {
     if (spent) return;
@@ -66,15 +83,55 @@ export function createRestartGate(opts: RestartGateOptions): RestartGate {
         `still ${active} turn(s) streaming after ${Math.round(maxWaitMs / 1000)}s — restarting anyway`,
       );
     } else {
-      log("idle — restarting to load new server code");
+      log("idle — running precheck before restart");
     }
-    spent = true;
-    pending = false;
-    opts.onRestart();
+
+    if (!opts.precheck) {
+      // No precheck configured — original fast path.
+      spent = true;
+      pending = false;
+      opts.onRestart();
+      return;
+    }
+
+    precheckInFlight = true;
+    // We deliberately don't `await` here: tryRestart is called from a timer.
+    void (async () => {
+      let result: { ok: boolean; logs?: string };
+      try {
+        result = await opts.precheck!();
+      } catch (err) {
+        result = { ok: false, logs: `precheck threw: ${String(err)}` };
+      }
+      precheckInFlight = false;
+      if (result.ok) {
+        if (result.logs) log(`precheck ok: ${result.logs}`);
+        else log("precheck ok — restarting to load new server code");
+        spent = true;
+        pending = false;
+        opts.onRestart();
+        return;
+      }
+      // FAILED precheck → keep serving the current version. Re-arm the gate so
+      // the next save (presumably the fix) triggers a fresh attempt.
+      log(`precheck FAILED — keeping current version. Save again to retry.`);
+      if (result.logs) log(result.logs);
+      pending = false;
+      // If a change arrived while we were checking, treat it as a fresh signal.
+      if (changedDuringPrecheck) {
+        changedDuringPrecheck = false;
+        notifyChange();
+      }
+    })();
   }
 
   function notifyChange(): void {
     if (spent) return;
+    if (precheckInFlight) {
+      // Coalesce: the in-flight precheck's failure path will rearm us.
+      changedDuringPrecheck = true;
+      return;
+    }
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       debounceTimer = null;

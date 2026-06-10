@@ -1,24 +1,32 @@
-// Self-Healing Deployer (Phase 2 entrypoint) — SEPARATE PROCESS
+// Self-Healing Deployer (Phase 2/4 entrypoint) — SEPARATE PROCESS
 //
 // See docs/architecture/self-healing-deploy.md. This is the small, rarely-
 // changed process that owns deploys so it can roll back the app even when the
 // app is broken. It runs as its OWN NSSM service (failure-domain isolation),
 // as Administrator (repo owner) so git works.
 //
-// Scope (first cut): WEB ONLY, activation via the API server's existing
-// /api/services/web/restart endpoint (no re-architecting of supervision yet).
+// Scope: WEB + API (Phase 4 — "Bring `api` + `packages/shared` under the
+// contract"). The API is activated by bouncing its NSSM service; the deployer
+// is its OWN service so the bounce never kills the rollback path.
 //
-// Flow per commit on `staging`:
-//   build (typecheck + next build) -> validate -> activate (restart web)
-//   -> verify (readiness window + smoke) -> PROMOTE, else ROLL BACK to known-
-//   good (git reset + rebuild + restart), feed logs to the AI, retry until
-//   stable or the 8h wall-clock budget is spent, then PARK (journal preserved).
+// Flow per commit on `staging` (composite across all children, in order):
+//   build  (api: tsc-emit | web: typecheck + next build)
+//   -> validate (api: vitest | web: built-in)
+//   -> activate (api FIRST: nssm restart   |   web SECOND: /api/services/web/restart)
+//   -> verify   (api: TCP + /healthz       |   web: TCP + /)
+//   -> PROMOTE, else ROLL BACK to known-good (git reset + rebuild web + restart
+//      both), feed logs to the AI, retry until stable or the 8h wall-clock
+//      budget is spent, then PARK (journal preserved).
+//
+// Order matters: API restarts first so a new server contract is in place
+// before the web reconnects. Verify is in the same order so a broken API
+// surfaces before web verification (faster, more focused rollback signal).
 //
 // STATUS: integration glue — assembled from unit-tested modules
-// (deploy-controller, git-known-good, service-deploy-pipeline, commit-trigger).
-// The AI RepairAgent is a STUB (parks) until the chat-routed agent (decision
-// 3b) is wired. The non-AI build/validate/activate/verify/rollback path is
-// complete and is what we debug live first.
+// (deploy-controller, git-known-good, service-deploy-pipeline,
+// multi-service-deploy-pipeline, api-deploy, commit-trigger). The AI
+// RepairAgent is a STUB (parks) until the chat-routed agent (decision 3b)
+// is wired.
 
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -29,11 +37,15 @@ import path from "node:path";
 import { CommitTrigger } from "./services/commit-trigger.js";
 import {
   DeployController,
+  type DeployPipeline,
   type KnownGoodStore,
   type RepairAgent,
 } from "./services/deploy-controller.js";
 import { GitKnownGoodStore } from "./services/git-known-good.js";
 import { ServiceDeployPipeline } from "./services/service-deploy-pipeline.js";
+import { MultiServiceDeployPipeline } from "./services/multi-service-deploy-pipeline.js";
+import { createApiDeployPipeline } from "./services/api-deploy.js";
+import { resolveDeployToken } from "./services/deploy-token.js";
 
 // ----- config -----
 const REPO_DIR = process.env.MCA_PROJECT_ROOT
@@ -47,6 +59,12 @@ const STAGING_REF = process.env.MCA_STAGING_REF || "staging";
 const BUDGET_MS = parseInt(process.env.MCA_DEPLOY_BUDGET_MS || String(8 * 60 * 60 * 1000), 10);
 const LOG_DIR = path.join(REPO_DIR, "logs");
 const JOURNAL_PATH = path.join(LOG_DIR, "deploy-journal.json");
+// API NSSM service name + nssm.exe location — mirrors install-windows.ps1.
+const API_SERVICE_NAME = process.env.MCA_SERVICE_NAME || "MyCodingAssistant";
+const NSSM_PATH = process.env.MCA_NSSM_PATH || path.join(REPO_DIR, "tools", "nssm", "nssm.exe");
+// Toggle: include the API in the deploy contract (Phase 4). Defaults ON; set
+// MCA_DEPLOY_INCLUDE_API=0 to fall back to web-only (e.g. while debugging).
+const INCLUDE_API = process.env.MCA_DEPLOY_INCLUDE_API !== "0";
 
 function log(msg: string): void {
   console.log(`[deployer] ${new Date().toISOString()} ${msg}`);
@@ -143,7 +161,27 @@ async function buildAndTypecheck(): Promise<void> {
   if (!b.ok) throw new Error(`next build failed:\n${b.logs}`);
 }
 
+// ----- spawn helper for the API pipeline (matches its `run` shape) -----
+// `run()` above already returns {ok, logs}; api-deploy expects the same shape.
+async function runForApi(
+  cmd: string,
+  args: string[],
+  cwd: string,
+): Promise<{ ok: boolean; logs: string }> {
+  return run(cmd, args, cwd);
+}
+
 // ----- known-good store composed with rebuild+restart on rollback -----
+async function rebuildAndRestartApi(): Promise<void> {
+  // API rollback: rebuild (tsc emits dist/) then bounce the NSSM service.
+  // Best-effort — we log warnings instead of throwing so a web-only failure
+  // doesn't strand the system after a partial rollback.
+  const built = await run("npm", ["run", "build", "--workspace=@mca/server"], REPO_DIR);
+  if (!built.ok) log(`rollback API build warning: ${built.logs}`);
+  const restart = await run(NSSM_PATH, ["restart", API_SERVICE_NAME], REPO_DIR);
+  if (!restart.ok) log(`rollback API restart warning: ${restart.logs}`);
+}
+
 function makeComposedStore(): KnownGoodStore {
   const git = new GitKnownGoodStore({
     repoDir: REPO_DIR,
@@ -154,16 +192,21 @@ function makeComposedStore(): KnownGoodStore {
     mark: () => git.mark(),
     promote: () => git.promote(), // candidate is already built+activated+verified
     rollback: async () => {
-      // Return git to known-good, then actually serve it: rebuild + restart.
+      // Return git to known-good, then actually serve it. Rebuild + restart
+      // both children in the same order they were activated (API first, web
+      // second) so the web restart picks up the rolled-back server contract.
       await git.rollback();
-      await buildAndTypecheck().catch((e) => log(`rollback rebuild warning: ${String(e)}`));
-      await restartWebViaApi().catch((e) => log(`rollback restart warning: ${String(e)}`));
+      if (INCLUDE_API) {
+        await rebuildAndRestartApi().catch((e) => log(`rollback API warning: ${String(e)}`));
+      }
+      await buildAndTypecheck().catch((e) => log(`rollback web build warning: ${String(e)}`));
+      await restartWebViaApi().catch((e) => log(`rollback web restart warning: ${String(e)}`));
     },
   };
 }
 
-// ----- pipeline -----
-function makePipeline(): ServiceDeployPipeline {
+// ----- pipelines -----
+function makeWebPipeline(): ServiceDeployPipeline {
   return new ServiceDeployPipeline({
     service: { restart: restartWebViaApi },
     probes: {
@@ -180,16 +223,150 @@ function makePipeline(): ServiceDeployPipeline {
   });
 }
 
-// ----- AI repair agent (STUB — chat-routed impl is decision 3b, wired next) -----
-const repairStub: RepairAgent = {
-  attempt: async (ctx) => {
-    log(
-      `repair needed (attempt ${ctx.attempt}, failed at ${ctx.failedPhase}). ` +
-        `Chat-routed repair agent not wired yet — parking. Logs:\n${ctx.logs}`,
+function makeApiPipeline(): ServiceDeployPipeline {
+  return createApiDeployPipeline({
+    repoDir: REPO_DIR,
+    serviceName: API_SERVICE_NAME,
+    nssmPath: NSSM_PATH,
+    apiPort: API_PORT,
+    run: runForApi,
+    portListening: (p) => portListening(p),
+    httpStatus: (p, pathName) => httpStatus(p, pathName),
+    stabilityWindowMs: parseInt(process.env.MCA_API_STABILITY_MS || "20000", 10),
+    probeIntervalMs: parseInt(process.env.MCA_API_PROBE_INTERVAL_MS || "3000", 10),
+  });
+}
+
+function makePipeline(): DeployPipeline {
+  const web = makeWebPipeline();
+  if (!INCLUDE_API) return web;
+  // API first so the web reconnects to a server already on the new contract.
+  return new MultiServiceDeployPipeline({
+    children: [
+      { name: "api", pipeline: makeApiPipeline() },
+      { name: "web", pipeline: web },
+    ],
+  });
+}
+
+// ----- AI repair agent (Phase 3 — chat-routed, autonomous) -----
+// POSTs the failure context to the API server's /api/repair/prompt; that
+// endpoint owns the dedicated "Self-healing deploy" chat session, sends the
+// message to the AI, and resolves when either a new commit appears on
+// `staging` (= retry) or the AI gives up (= park) or `remainingMs` runs out.
+//
+// We talk HTTP rather than running the agent in-process because the deployer
+// is a separate failure-domain: keeping it stateless wrt the chat session
+// means a deployer crash never loses repair-conversation context.
+const DEPLOY_TOKEN = resolveDeployToken({ repoDir: REPO_DIR });
+const API_BASE = `http://127.0.0.1:${API_PORT}`;
+const LOG_CAP_BYTES = 12 * 1024;
+
+function postJson<T>(
+  pathName: string,
+  body: unknown,
+  timeoutMs: number,
+): Promise<{ status: number; data: T | null; error?: string }> {
+  return new Promise((resolve) => {
+    const payload = Buffer.from(JSON.stringify(body), "utf8");
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: API_PORT,
+        path: pathName,
+        method: "POST",
+        timeout: timeoutMs,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": payload.length,
+          "X-MCA-Deploy-Token": DEPLOY_TOKEN,
+        },
+      },
+      (res) => {
+        let chunks = "";
+        res.setEncoding("utf8");
+        res.on("data", (d) => (chunks += d));
+        res.on("end", () => {
+          try {
+            const data = chunks ? (JSON.parse(chunks) as T) : null;
+            resolve({ status: res.statusCode ?? 0, data });
+          } catch (err) {
+            resolve({ status: res.statusCode ?? 0, data: null, error: String(err) });
+          }
+        });
+      },
     );
-    return false; // no new candidate → controller parks
+    req.on("error", (err) => resolve({ status: 0, data: null, error: String(err) }));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ status: 0, data: null, error: `timeout after ${timeoutMs}ms` });
+    });
+    req.write(payload);
+    req.end();
+  });
+}
+
+const chatRoutedRepair: RepairAgent = {
+  attempt: async (ctx) => {
+    // Cap logs so the IPC payload stays reasonable; the API server caps again.
+    const logs =
+      ctx.logs.length > LOG_CAP_BYTES
+        ? `[…truncated…]\n${ctx.logs.slice(-LOG_CAP_BYTES)}`
+        : ctx.logs;
+    log(
+      `requesting repair (attempt ${ctx.attempt}, failed at ${ctx.failedPhase}, ~${Math.round(
+        ctx.remainingMs / 60_000,
+      )}min left). API: ${API_BASE}/api/repair/prompt`,
+    );
+    // HTTP timeout: a bit longer than the AI's budget so the API server can
+    // resolve naturally; if we time out first we just park.
+    const timeoutMs = Math.min(ctx.remainingMs + 30_000, 8 * 60 * 60 * 1000);
+    const r = await postJson<{ newSha: string | null; reason: string }>(
+      "/api/repair/prompt",
+      {
+        attempt: ctx.attempt,
+        failedPhase: ctx.failedPhase,
+        logs,
+        elapsedMs: ctx.elapsedMs,
+        remainingMs: ctx.remainingMs,
+      },
+      timeoutMs,
+    );
+    if (r.status !== 200 || !r.data) {
+      log(`repair endpoint returned ${r.status}${r.error ? ` (${r.error})` : ""} — parking.`);
+      return false;
+    }
+    if (r.data.newSha) {
+      log(`AI committed ${r.data.newSha.slice(0, 8)} (reason=${r.data.reason}). retrying.`);
+      return true;
+    }
+    log(`AI did not commit a fix (reason=${r.data.reason}). parking.`);
+    return false;
   },
 };
+
+async function notifyParked(
+  result: { attempts: number; parkedReason?: string },
+  liveSha: string | undefined,
+): Promise<void> {
+  const r = await postJson<{ ok: true }>(
+    "/api/repair/parked",
+    {
+      reason: result.parkedReason ?? "unknown",
+      attempts: result.attempts,
+      liveSha,
+    },
+    10_000,
+  );
+  if (r.status !== 200) {
+    log(`park notification failed (status ${r.status}${r.error ? `: ${r.error}` : ""})`);
+  }
+}
+
+async function currentLiveSha(): Promise<string | undefined> {
+  const r = await run("git", ["-C", REPO_DIR, "rev-parse", LIVE_REF], REPO_DIR);
+  return r.ok ? r.logs.trim() || undefined : undefined;
+}
 
 // ----- wire it up -----
 function persistJournal(result: unknown): void {
@@ -214,7 +391,7 @@ async function runDeploy(sha: string): Promise<void> {
     const controller = new DeployController({
       pipeline: makePipeline(),
       knownGood: makeComposedStore(),
-      repair: repairStub,
+      repair: chatRoutedRepair,
       budgetMs: BUDGET_MS,
       onPhase: (phase, info) => log(`phase=${phase} attempt=${info?.attempt}`),
     });
@@ -228,7 +405,11 @@ async function runDeploy(sha: string): Promise<void> {
         `PARKED (${result.parkedReason}) after ${result.attempts} attempt(s). ` +
           `Live is on known-good. Effort preserved on '${STAGING_REF}' + ${JOURNAL_PATH}.`,
       );
-      // TODO: ping the human (chat system message / Services banner).
+      // Ping the human via the API (chat system-message + socket event).
+      // Best effort: the API may itself be wedged — we already logged + journaled.
+      await notifyParked(result, await currentLiveSha()).catch((err) =>
+        log(`park notification crashed: ${String(err)}`),
+      );
     }
   } catch (err) {
     log(`deploy crashed: ${String(err)}`);

@@ -61,6 +61,66 @@ describe("createRestartGate", () => {
     expect(onRestart).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts the restart when precheck fails and re-arms on next change", async () => {
+    const onRestart = vi.fn();
+    let precheckResult: { ok: boolean; logs?: string } = { ok: false, logs: "TS2307" };
+    const precheck = vi.fn(async () => precheckResult);
+    const gate = createRestartGate({
+      activeTurns: () => 0,
+      onRestart,
+      debounceMs: 100,
+      precheck,
+    });
+    gate.notifyChange();
+    await vi.advanceTimersByTimeAsync(100); // debounce -> tryRestart -> precheck
+    // Let the awaited precheck promise resolve.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(precheck).toHaveBeenCalledTimes(1);
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(gate.isSpent()).toBe(false);
+
+    // Next change with a passing precheck should now go through.
+    precheckResult = { ok: true };
+    gate.notifyChange();
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(precheck).toHaveBeenCalledTimes(2);
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(gate.isSpent()).toBe(true);
+  });
+
+  it("queues a change that arrives during an in-flight failing precheck", async () => {
+    const onRestart = vi.fn();
+    let pass = false;
+    let resolveFirst!: () => void;
+    const precheck = vi.fn(
+      () =>
+        new Promise<{ ok: boolean }>((resolve) => {
+          if (!pass) resolveFirst = () => resolve({ ok: false });
+          else resolve({ ok: true });
+        }),
+    );
+    const gate = createRestartGate({
+      activeTurns: () => 0,
+      onRestart,
+      debounceMs: 50,
+      precheck,
+    });
+    gate.notifyChange();
+    await vi.advanceTimersByTimeAsync(50); // debounce fires -> precheck starts (hanging)
+    // A second change while the precheck is still running.
+    gate.notifyChange();
+    expect(precheck).toHaveBeenCalledTimes(1); // not started twice
+    // Now fail the first precheck; its rearm path should re-fire notifyChange.
+    pass = true;
+    resolveFirst();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50); // re-armed debounce
+    await vi.advanceTimersByTimeAsync(0);
+    expect(precheck).toHaveBeenCalledTimes(2);
+    expect(onRestart).toHaveBeenCalledTimes(1);
+  });
+
   it("force-restarts after maxWaitMs if a turn is stuck streaming", () => {
     const onRestart = vi.fn();
     const gate = createRestartGate({

@@ -15,6 +15,8 @@ import { ConnectorRegistry } from "./connectors/registry.js";
 import { createPiConnector } from "./connectors/pi/index.js";
 import { ServiceRegistry, createWebService } from "./services/service-registry.js";
 import { HealthWatchdog } from "./services/health-watchdog.js";
+import { startWatchSafe } from "./services/watch-safe-restarter.js";
+import { runDevPrecheck } from "./services/dev-precheck.js";
 import {
   appParametersFor,
   buildTargetFor,
@@ -24,6 +26,12 @@ import {
 import type { ServiceStatus } from "./services/service-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
+import { createCfAccessMiddleware, readCfAccessConfigFromEnv } from "./api/cf-access.js";
+import { installCfAccessSocketGuard } from "./websocket/cf-access-guard.js";
+import { createAccessAuditLogger } from "./services/access-audit.js";
+import { resolveDeployToken } from "./services/deploy-token.js";
+import { RepairSessionService } from "./services/repair-session.js";
+import { registerRepairRoutes } from "./api/repair-routes.js";
 
 // Resolve paths relative to the entry script, not the cwd. The previous
 // `process.cwd()`-based default for MCA_WEB_DIR broke when starting the
@@ -63,6 +71,48 @@ const corsOrigin: cors.CorsOptions["origin"] = process.env.MCA_CORS_ORIGIN
 const app = express();
 app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
+
+// ----- Liveness probe (always unauthenticated) -----
+// Cloudflare Tunnel + Docker healthcheck poll this. Deliberately minimal: no
+// DB hit, no auth, no dependency checks. "The server process is alive and
+// answering HTTP" is all this confirms. Use /readyz for dependency state.
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
+// ----- Cloudflare Access JWT enforcement -----
+// Off by default (dev). In prod, set:
+//   REQUIRE_CF_ACCESS_JWT=true
+//   CF_ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
+//   CF_ACCESS_AUD=<application audience tag>
+// The factory throws on enabled+missing-config so we can't accidentally
+// default-allow. Anything reaching the app after this point has a verified
+// `req.user.email`.
+const cfAccessCfg = readCfAccessConfigFromEnv();
+app.use(createCfAccessMiddleware(cfAccessCfg));
+
+// Audit log of every authenticated request — keyed on req.user.email. Cheap
+// (JSONL append), invaluable for cost-anomaly investigation. No-op when
+// enforcement is off.
+const accessAudit = createAccessAuditLogger({
+  enabled: cfAccessCfg.enabled,
+  // Lives next to other operational logs.
+  filePath: path.join(PROJECT_ROOT, "logs", "access.log"),
+});
+app.use(accessAudit.middleware);
+
+// ----- Readiness probe (still public, but checks deeper state) -----
+// Right after Access so it survives the auth gate; reports degraded if the
+// Pi connector hasn't initialised. Public because Cloudflare Health Checks
+// don't carry an Access JWT.
+app.get("/readyz", (_req, res) => {
+  const piReady = Boolean(piSessionManager);
+  if (!piReady) {
+    res.status(503).json({ status: "not_ready", reasons: ["pi_connector_missing"] });
+    return;
+  }
+  res.json({ status: "ready" });
+});
 
 // HTTP server
 const httpServer = createServer(app);
@@ -318,7 +368,56 @@ app.post("/api/web/restart", async (_req, res) => {
   res.json({ success: true, status: services.list() });
 });
 
+// ----- Model auto-sync -----
+// Keep the model picker current with the provider's authoritative list, so new
+// models (and their effort levels) show up without a manual edit or SDK update.
+const MODEL_SYNC_INTERVAL_MS = 12 * 60 * 60_000; // 12 hours
+let lastModelSync: import("./services/model-sync.js").SyncResult | null = null;
+async function runModelSync(reason: string): Promise<void> {
+  if (!piSessionManager.syncLatestModels) return;
+  const r = await piSessionManager.syncLatestModels();
+  lastModelSync = r;
+  if (r.error) console.warn(`[models] sync (${reason}) failed: ${r.error}`);
+  else if (r.added.length) console.log(`[models] sync (${reason}) added: ${r.added.join(", ")}`);
+  else console.log(`[models] sync (${reason}) — up to date (${r.totalOffered} offered)`);
+}
+app.get("/api/models/sync", (_req, res) => {
+  res.json({
+    supported: !!piSessionManager.syncLatestModels,
+    last: lastModelSync,
+    intervalMs: MODEL_SYNC_INTERVAL_MS,
+  });
+});
+app.post("/api/models/sync", async (_req, res) => {
+  if (!piSessionManager.syncLatestModels) {
+    res.status(400).json({ ok: false, error: "model sync not supported by this connector" });
+    return;
+  }
+  await runModelSync("manual");
+  res.json({ ok: !lastModelSync?.error, result: lastModelSync });
+});
+
 registerApiRoutes(app, piSessionManager, { cwd: PROJECT_ROOT });
+
+// ----- Self-healing repair loop (Phase 3) -----
+// One dedicated, visible chat session ("Self-healing deploy") that the
+// separate deployer process drives via POST /api/repair/prompt. The session
+// is fully autonomous — the AI reads logs, edits, and commits to `staging`
+// without human input — but visible in the UI so a human CAN watch /
+// interrupt / take over.
+const deployToken = resolveDeployToken({ repoDir: PROJECT_ROOT });
+const repairService = new RepairSessionService({
+  manager: piSessionManager,
+  repoDir: PROJECT_ROOT,
+  model: process.env.MCA_REPAIR_MODEL || "anthropic/claude-sonnet-4-5",
+  onPark: (ctx) => {
+    // Broadcast to all connected clients so the Services screen can flag
+    // "deploy parked" without polling. The chat itself also gets a system
+    // follow-up via recordPark → ensureSession → followUp.
+    io.emit("service:repairParked", ctx);
+  },
+});
+registerRepairRoutes(app, { service: repairService, token: deployToken });
 // Auto-reload-on-redeploy: report the current frontend build id on every
 // (re)connect. The client remembers the id it first saw and reloads itself
 // once when a newer one appears (i.e. the web app was redeployed) — so a deploy
@@ -370,6 +469,11 @@ io.on("connection", (socket) => {
   });
 });
 
+// Install the WebSocket-side guard BEFORE handlers register their listeners.
+// Same JWT verification as Express — without this, an upgrade could bypass
+// the HTTP gate entirely.
+installCfAccessSocketGuard(io, cfAccessCfg);
+
 registerWebSocketHandlers(io, piSessionManager);
 
 // Forward service-status changes to all connected clients so the Services
@@ -395,6 +499,55 @@ const watchdog = new HealthWatchdog({
 services.on("status", () => watchdog.check());
 watchdog.start();
 
+// ----- Watch-safe in-process restarter (MCA_WATCH_SAFE=1) -----
+// Replaces `tsx watch` for supervised dev: WE watch the server source, debounce,
+// run a tsc precheck, and then `process.exit(0)` so the OS service manager
+// (NSSM) brings us back on the new code. This adds two guarantees `tsx watch`
+// doesn't give us:
+//   1. We never restart mid-reply — the gate waits for `activeTurns === 0`.
+//   2. We never restart onto a broken candidate — a failing `tsc --noEmit`
+//      cancels the restart and re-arms on the next save (the safety net
+//      missing in the 2026-06-10 incident).
+// Off by default so a developer running `npm run dev:server` (under tsx watch)
+// doesn't end up with two fighting watchers.
+if (process.env.MCA_WATCH_SAFE === "1") {
+  const serverDir = path.resolve(HERE, "..");
+  const stopWatchSafe = startWatchSafe({
+    watchDirs: [path.join(serverDir, "src")],
+    activeTurns: () => {
+      // Count sessions currently streaming a reply. ConnectorManager has
+      // listActiveSessions(); duck-typed to avoid widening the interface for
+      // a dev-only feature.
+      try {
+        return piSessionManager.listActiveSessions().filter((s) => s.isStreaming).length;
+      } catch {
+        return 0;
+      }
+    },
+    precheck: async () => {
+      const r = await runDevPrecheck({ serverDir });
+      // Surface only the tail (most actionable) to the gate's log channel.
+      return { ok: r.ok, logs: r.ok ? undefined : r.logs.split("\n").slice(-12).join("\n") };
+    },
+    onRestart: () => {
+      console.log("[watch-safe] graceful restart — exiting so the supervisor relaunches");
+      // Same shutdown path as a SIGTERM — closes sockets, stops child services,
+      // then exits 0. The OS service manager restarts us.
+      void shutdown();
+    },
+    log: (msg) => console.log(`[watch-safe] ${msg}`),
+  });
+  // Best-effort cleanup on shutdown so we don't leak fs watchers.
+  process.on("exit", () => {
+    try {
+      stopWatchSafe();
+    } catch {
+      /* best effort */
+    }
+  });
+  console.log(`[watch-safe] watching ${path.join(serverDir, "src")} (precheck: tsc --noEmit)`);
+}
+
 httpServer.listen(PORT, HOST, () => {
   console.log(`[MCA Server] Running on http://${HOST}:${PORT}`);
   console.log("[MCA Server] WebSocket ready for frontend connections");
@@ -408,6 +561,10 @@ httpServer.listen(PORT, HOST, () => {
   } else {
     console.log("[MCA Server] Web supervisor disabled (set MCA_SUPERVISE_WEB=1 to enable)");
   }
+  // Sync models shortly after boot, then every 12 hours. Unref'd so it never
+  // holds the process open during shutdown.
+  setTimeout(() => void runModelSync("startup"), 8_000).unref();
+  setInterval(() => void runModelSync("interval"), MODEL_SYNC_INTERVAL_MS).unref();
 });
 
 let shuttingDown = false;

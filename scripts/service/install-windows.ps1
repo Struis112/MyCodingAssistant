@@ -28,6 +28,19 @@
 #   MCA_PROD=1          -- `node dist/start-prod.js` (`next start`) against the
 #                          production build: optimised bundle, rebuild+restart on
 #                          change. Use for real deployments.
+#
+# Opt-in safety knobs (dev profile only; ignored under MCA_PROD=1):
+#   MCA_WATCH_SAFE=1    -- run under plain `tsx` (NO --watch) and let the
+#                          in-process WatchSafeRestarter own the restart:
+#                          waits for active chat turns to finish AND runs a
+#                          `tsc --noEmit` precheck before swapping. Prevents
+#                          "swap onto broken candidate" (2026-06-10 class of
+#                          incident). Process exit triggers NSSM to relaunch.
+#   MCA_DEV_PRECHECK=1  -- (compatible with the default `tsx watch`) run a
+#                          tsc precheck BEFORE importing index.js in the
+#                          supervised entry. Fails fast on broken candidates
+#                          with a focused tsc diagnostic instead of a
+#                          half-initialised ESM load.
 #   AppStdout/AppStderr : logs\mca.log (rotated by NSSM)
 #   AppExit Default Restart, throttled
 #
@@ -54,8 +67,10 @@ $ApiPort        = if ($env:MCA_PORT)            { $env:MCA_PORT }            els
 $WebPort        = if ($env:MCA_WEB_PORT)        { $env:MCA_WEB_PORT }        else { "7642" }
 # Profile: watch/HMR by default; set MCA_PROD=1 for the production build.
 # MCA_WATCH=1 selects watch explicitly (it's also the default).
-$ProdMode  = ($env:MCA_PROD -eq "1")
-$WatchMode = (-not $ProdMode)
+$ProdMode    = ($env:MCA_PROD -eq "1")
+$WatchMode   = (-not $ProdMode)
+$WatchSafe   = ((-not $ProdMode) -and ($env:MCA_WATCH_SAFE -eq "1"))
+$DevPrecheck = ((-not $ProdMode) -and ($env:MCA_DEV_PRECHECK -eq "1"))
 
 # ---- Admin check ----
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -84,9 +99,20 @@ if ($ProdMode) {
         exit 1
     }
     if (-not (Test-Path $SrcEntry)) { Write-Error "Cannot find $SrcEntry."; exit 1 }
-    $AppArgs = """$TsxCli"" watch ""$SrcEntry"""
+    if ($WatchSafe) {
+        # No `watch` flag: plain `tsx` runs the entry once; the in-process
+        # WatchSafeRestarter owns reload (with the precheck gate). When it
+        # decides to restart it calls process.exit(0) and NSSM relaunches us.
+        $AppArgs = """$TsxCli"" ""$SrcEntry"""
+    } else {
+        $AppArgs = """$TsxCli"" watch ""$SrcEntry"""
+    }
 }
-Write-Host ("Profile     : " + $(if ($ProdMode) { 'prod (next start, built)' } else { 'watch/HMR (tsx watch + next dev)' }))
+$ProfileLabel = if ($ProdMode) { 'prod (next start, built)' }
+                elseif ($WatchSafe) { 'watch-safe (in-process gate + precheck) + next dev' }
+                else { 'watch/HMR (tsx watch + next dev)' }
+Write-Host ("Profile     : " + $ProfileLabel)
+if ($DevPrecheck) { Write-Host "DevPrecheck : enabled (tsc --noEmit before import)" }
 
 # ---- Resolve node.exe ----
 $NodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
@@ -230,6 +256,8 @@ $envBlock = (@(
     "MCA_SUPERVISE_WEB=1",
     $(if ($ProdMode) { "NODE_ENV=production" } else { "NODE_ENV=development" }),
     $(if ($ProdMode) { "MCA_WEB_DEV=0" } else { "MCA_WEB_DEV=1" }),
+    $(if ($WatchSafe)   { "MCA_WATCH_SAFE=1" }   else { "MCA_WATCH_SAFE=0" }),
+    $(if ($DevPrecheck) { "MCA_DEV_PRECHECK=1" } else { "MCA_DEV_PRECHECK=0" }),
     "USERPROFILE=$UserProfile",
     "HOMEDRIVE=$(($UserProfile -split ':')[0]):",
     "HOMEPATH=$(($UserProfile -replace '^[A-Za-z]:', ''))"
