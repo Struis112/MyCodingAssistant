@@ -46,6 +46,7 @@ import { ServiceDeployPipeline } from "./services/service-deploy-pipeline.js";
 import { MultiServiceDeployPipeline } from "./services/multi-service-deploy-pipeline.js";
 import { createApiDeployPipeline } from "./services/api-deploy.js";
 import { resolveDeployToken } from "./services/deploy-token.js";
+import { acquireDeployLock } from "./services/deploy-bounce-lock.js";
 
 // ----- config -----
 const REPO_DIR = process.env.MCA_PROJECT_ROOT
@@ -122,17 +123,34 @@ function portListening(port: number): Promise<boolean> {
 }
 
 async function restartWebViaApi(): Promise<void> {
-  const code = await new Promise<number | null>((resolve) => {
-    const req = http.request(
-      { host: "127.0.0.1", port: API_PORT, path: "/api/services/web/restart", method: "POST" },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode ?? null);
-      },
-    );
-    req.on("error", () => resolve(null));
-    req.end();
-  });
+  // Retry on transient connection failures: when watch-safe or NSSM is mid-
+  // bouncing the API server, /api/services/web/restart momentarily returns
+  // ECONNREFUSED. The cooperative bounce-lock SHOULD prevent overlap, but
+  // defence-in-depth retry costs almost nothing and saves the deploy attempt
+  // when (not if) something else races. Backoff: 0.5/1/2/4s, max 4 attempts.
+  const callOnce = (): Promise<number | null> =>
+    new Promise<number | null>((resolve) => {
+      const req = http.request(
+        { host: "127.0.0.1", port: API_PORT, path: "/api/services/web/restart", method: "POST" },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? null);
+        },
+      );
+      req.on("error", () => resolve(null));
+      req.end();
+    });
+  let code: number | null = null;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    code = await callOnce();
+    if (code !== null) break;
+    if (attempt === 4) break;
+    const delayMs = 500 * 2 ** (attempt - 1);
+    log(`web restart endpoint unreachable (attempt ${attempt}/4) — retry in ${delayMs}ms`);
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
   if (code !== 200) throw new Error(`web restart endpoint returned ${code ?? "no response"}`);
 }
 
@@ -274,6 +292,14 @@ const DEPLOY_TOKEN = resolveDeployToken({ repoDir: REPO_DIR });
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const LOG_CAP_BYTES = 12 * 1024;
 
+// Transient errors we'll retry on. Watch-safe + the API service's own
+// restarts mean a POST to localhost can hit ECONNREFUSED for a few seconds
+// even when the service is supposed to be running — the cooperative lock
+// SHOULD prevent that for the activate window, but a defence-in-depth retry
+// on these specific errors costs us almost nothing and saves the entire
+// deploy attempt when (not if) something else races.
+const TRANSIENT_HTTP_ERRORS = /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|socket hang up/i;
+
 function postJson<T>(
   pathName: string,
   body: unknown,
@@ -318,6 +344,48 @@ function postJson<T>(
   });
 }
 
+/**
+ * postJson with exponential backoff on transient connection errors. The
+ * deployer talks ONLY to localhost, so a transient ECONNREFUSED is virtually
+ * always "the API is mid-restart" rather than a real failure — wait it out.
+ *
+ * Backoff schedule: 0.5s, 1s, 2s, 4s (up to ~7.5s extra wall-clock on top of
+ * the per-call timeoutMs). Capped at 4 attempts because if it's STILL down
+ * after that the API genuinely isn't coming back without intervention, and
+ * we should surface the failure to the controller so it parks.
+ */
+async function postJsonWithRetry<T>(
+  pathName: string,
+  body: unknown,
+  timeoutMs: number,
+  opts: { maxAttempts?: number; logRetries?: boolean } = {},
+): Promise<{ status: number; data: T | null; error?: string }> {
+  const maxAttempts = opts.maxAttempts ?? 4;
+  const logRetries = opts.logRetries ?? true;
+  let lastResult: { status: number; data: T | null; error?: string } | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await postJson<T>(pathName, body, timeoutMs);
+    lastResult = r;
+    // Success path: any HTTP response (even 4xx/5xx) means the API is up and
+    // talking to us — don't retry, let the caller decide what to do.
+    if (r.status !== 0) return r;
+    // Transient connection error — retry with backoff (unless we're out of
+    // attempts).
+    const transient = r.error && TRANSIENT_HTTP_ERRORS.test(r.error);
+    if (!transient || attempt === maxAttempts) return r;
+    const delayMs = 500 * 2 ** (attempt - 1); // 500, 1000, 2000, 4000
+    if (logRetries) {
+      log(
+        `${pathName} hit transient error (${r.error}) on attempt ${attempt}/${maxAttempts} — retry in ${delayMs}ms`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return lastResult ?? { status: 0, data: null, error: "no attempts made" };
+}
+
 const chatRoutedRepair: RepairAgent = {
   attempt: async (ctx) => {
     // Cap logs so the IPC payload stays reasonable; the API server caps again.
@@ -333,7 +401,7 @@ const chatRoutedRepair: RepairAgent = {
     // HTTP timeout: a bit longer than the AI's budget so the API server can
     // resolve naturally; if we time out first we just park.
     const timeoutMs = Math.min(ctx.remainingMs + 30_000, 8 * 60 * 60 * 1000);
-    const r = await postJson<{ newSha: string | null; reason: string }>(
+    const r = await postJsonWithRetry<{ newSha: string | null; reason: string }>(
       "/api/repair/prompt",
       {
         attempt: ctx.attempt,
@@ -361,7 +429,7 @@ async function notifyParked(
   result: { attempts: number; parkedReason?: string },
   liveSha: string | undefined,
 ): Promise<void> {
-  const r = await postJson<{ ok: true }>(
+  const r = await postJsonWithRetry<{ ok: true }>(
     "/api/repair/parked",
     {
       reason: result.parkedReason ?? "unknown",
@@ -399,6 +467,17 @@ async function runDeploy(sha: string): Promise<void> {
   }
   deploying = true;
   log(`commit ${sha.slice(0, 8)} on ${STAGING_REF} — starting deploy`);
+
+  // Acquire the cooperative bounce lock for the FULL deploy. The lock signals
+  // to the API server's in-process WatchSafeRestarter that we're going to
+  // bounce the service shortly — watch-safe abstains while the lock is fresh
+  // so it doesn't take the API down concurrently with our activate phase.
+  // Held across build/validate/activate/verify AND any rollback work, so the
+  // window is unambiguous: while this lock exists, ONLY the deployer touches
+  // service lifecycle. Released in finally{} so a deploy crash never leaves
+  // a wedged lock (stale-detection in deploy-bounce-lock.ts is the secondary
+  // safety net for an OS-level kill where finally{} can't run).
+  const lockHandle = acquireDeployLock(REPO_DIR, "deploying", { sha });
   try {
     const controller = new DeployController({
       pipeline: makePipeline(),
@@ -426,6 +505,7 @@ async function runDeploy(sha: string): Promise<void> {
   } catch (err) {
     log(`deploy crashed: ${String(err)}`);
   } finally {
+    lockHandle.release();
     deploying = false;
   }
 }

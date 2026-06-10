@@ -359,17 +359,28 @@ export class PiSessionManager implements ConnectorManager {
         return { added: [], totalOffered: 0, error: "no anthropic model to template from", at };
       }
 
-      const auth = await this.modelRegistry.getApiKeyAndHeaders(template);
-      if (!auth.ok) return { added: [], totalOffered: 0, error: `auth: ${auth.error}`, at };
-      const headers: Record<string, string> = {
-        "anthropic-version": "2023-06-01",
-        ...(auth.headers ?? {}),
-      };
-      if (auth.apiKey) headers["x-api-key"] = auth.apiKey;
-
-      const res = await fetch("https://api.anthropic.com/v1/models?limit=100", { headers });
-      if (!res.ok)
+      // Use the same OAuth bearer the usage indicator uses: resolved for THIS
+      // process's own account (works under LocalSystem, where the service's
+      // profile differs from the logged-in user's) and refreshed by the SDK. The
+      // models endpoint only accepts a subscription token with the oauth beta.
+      let token: string | undefined;
+      try {
+        token = await this.authStorage.getApiKey("anthropic");
+      } catch {
+        /* ignore */
+      }
+      if (!token) return { added: [], totalOffered: 0, error: "no anthropic token", at };
+      const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "anthropic-beta": "oauth-2025-04-20",
+          "anthropic-version": "2023-06-01",
+          Accept: "application/json",
+        },
+      });
+      if (!res.ok) {
         return { added: [], totalOffered: 0, error: `/v1/models HTTP ${res.status}`, at };
+      }
       const body = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> };
       const live: LiveModel[] = (body.data ?? []).map((m) => ({
         id: m.id,

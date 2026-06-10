@@ -17,6 +17,7 @@ import { ServiceRegistry, createWebService } from "./services/service-registry.j
 import { HealthWatchdog } from "./services/health-watchdog.js";
 import { startWatchSafe } from "./services/watch-safe-restarter.js";
 import { runDevPrecheck } from "./services/dev-precheck.js";
+import { readDeployLock } from "./services/deploy-bounce-lock.js";
 import {
   appParametersFor,
   buildTargetFor,
@@ -373,9 +374,30 @@ app.post("/api/web/restart", async (_req, res) => {
 // models (and their effort levels) show up without a manual edit or SDK update.
 const MODEL_SYNC_INTERVAL_MS = 15 * 60_000; // 15 minutes
 let lastModelSync: import("./services/model-sync.js").SyncResult | null = null;
+// HTTP statuses we'll retry transparently. 401 is the headline one — right
+// after boot the Pi SDK's OAuth refresh sometimes hasn't completed before
+// our 8s startup sync fires, and Anthropic rejects the stale bearer with
+// HTTP 401. By the time we retry 5 seconds later, refresh has run and we
+// get 200. 429 (rate-limit) is here for free — same backoff strategy.
+const MODEL_SYNC_TRANSIENT = /HTTP (401|429|5\d\d)/;
 async function runModelSync(reason: string): Promise<void> {
   if (!piSessionManager.syncLatestModels) return;
-  const r = await piSessionManager.syncLatestModels();
+  // Retry on transient HTTP failures: 5s, 10s, 20s, 40s. Total worst-case
+  // wait ~75s before we give up and log the final failure — well below the
+  // 15-minute interval, so a real outage still gets surfaced eventually but
+  // a boot-time race doesn't pollute the err log.
+  const delaysMs = reason === "startup" ? [5_000, 10_000, 20_000, 40_000] : [];
+  let r = await piSessionManager.syncLatestModels();
+  for (let i = 0; i < delaysMs.length && r.error && MODEL_SYNC_TRANSIENT.test(r.error); i++) {
+    console.log(
+      `[models] sync (${reason}) transient ${r.error} — retry in ${delaysMs[i] / 1000}s ` +
+        `(attempt ${i + 2}/${delaysMs.length + 1})`,
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, delaysMs[i]));
+    // eslint-disable-next-line no-await-in-loop
+    r = await piSessionManager.syncLatestModels();
+  }
   lastModelSync = r;
   if (r.error) console.warn(`[models] sync (${reason}) failed: ${r.error}`);
   else if (r.added.length) console.log(`[models] sync (${reason}) added: ${r.added.join(", ")}`);
@@ -525,6 +547,24 @@ if (process.env.MCA_WATCH_SAFE === "1") {
       }
     },
     precheck: async () => {
+      // Cooperative-lock check: if the deployer is in the middle of a
+      // build/validate/activate/verify cycle, it WILL bounce the API
+      // service shortly via NSSM. Restarting from inside the same process
+      // simultaneously is the exact race that caused the 2026-06-10
+      // 'activation failed: web restart endpoint returned no response'
+      // park. Abstain while the lock is fresh; the gate is re-armed for
+      // the next source change, so the AI's fix (or the operator's edit)
+      // still gets a restart — just after the deploy bounce is done.
+      const lock = readDeployLock(PROJECT_ROOT, { removeIfStale: true });
+      if (lock) {
+        return {
+          ok: false,
+          logs:
+            `deploy bounce in progress (phase=${lock.phase}, pid=${lock.pid}` +
+            (lock.sha ? `, sha=${lock.sha.slice(0, 8)}` : "") +
+            `) — abstaining; will re-evaluate on next change`,
+        };
+      }
       const r = await runDevPrecheck({ serverDir });
       // Surface only the tail (most actionable) to the gate's log channel.
       return { ok: r.ok, logs: r.ok ? undefined : r.logs.split("\n").slice(-12).join("\n") };
