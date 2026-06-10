@@ -253,6 +253,15 @@ export class PiSessionManager implements ConnectorManager {
     return session.sessionName ?? name;
   }
 
+  /** How many sessions are currently streaming a reply. 0 = idle. */
+  activeTurnCount(): number {
+    let n = 0;
+    for (const [, session] of this.sessions) {
+      if (session.isStreaming) n++;
+    }
+    return n;
+  }
+
   listActiveSessions(): ActiveSessionInfo[] {
     return Array.from(this.sessions.entries()).map(([id, session]) => ({
       id,

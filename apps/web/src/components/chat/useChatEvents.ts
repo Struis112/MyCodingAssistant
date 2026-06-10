@@ -22,11 +22,78 @@ export function useChatEvents() {
     const socket = getSocket();
     const store = () => useAppStore.getState();
 
+    // ---- streaming delta coalescing ----
+    // Buffer text/thinking deltas per session and apply them in ONE store
+    // update per frame (~30fps) instead of one per token. This is the main
+    // browser-side win for fast streams: far fewer renders and fewer O(n)
+    // item-array maps, with no visible loss of "liveness".
+    const FLUSH_MS = 33;
+    const pending = new Map<string, { text: string; thinking: string }>();
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const appendToLastBlock = (
+      sid: string,
+      currentId: string,
+      blockType: "text" | "thinking",
+      delta: string,
+    ) => {
+      store().updateItem(sid, currentId, (it) => {
+        if (it.kind !== "assistant") return it;
+        const blocks = [...it.blocks];
+        let idx = -1;
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          if (blocks[i].type === blockType) {
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) {
+          blocks.push({ type: blockType, text: delta, isStreaming: true });
+        } else {
+          const b = blocks[idx] as { type: typeof blockType; text: string; isStreaming?: boolean };
+          blocks[idx] = { type: blockType, text: b.text + delta, isStreaming: true };
+        }
+        return { ...it, blocks };
+      });
+    };
+    const flushSid = (sid: string) => {
+      const buf = pending.get(sid);
+      if (!buf) return;
+      pending.delete(sid);
+      const currentId = store().getCurrentAssistantId(sid);
+      if (!currentId) return;
+      if (buf.text) appendToLastBlock(sid, currentId, "text", buf.text);
+      if (buf.thinking) appendToLastBlock(sid, currentId, "thinking", buf.thinking);
+    };
+    const flushAll = () => {
+      flushTimer = null;
+      for (const sid of Array.from(pending.keys())) flushSid(sid);
+    };
+    const scheduleFlush = () => {
+      if (flushTimer == null) flushTimer = setTimeout(flushAll, FLUSH_MS);
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const onEvent = (data: { sessionId: string; event: any }) => {
       const sid = data.sessionId;
       const ev = data.event;
       if (!sid || !ev || typeof ev !== "object") return;
+
+      // High-frequency text/thinking deltas: buffer + coalesce (see above).
+      // Every other (structural) event flushes the buffer first so ordering is
+      // preserved (e.g. a text_end always lands after its text_deltas).
+      if (ev.type === "message_update") {
+        const sub = ev.assistantMessageEvent;
+        if (sub && (sub.type === "text_delta" || sub.type === "thinking_delta")) {
+          if (!store().getCurrentAssistantId(sid)) return;
+          const buf = pending.get(sid) ?? { text: "", thinking: "" };
+          if (sub.type === "text_delta") buf.text += sub.delta || "";
+          else buf.thinking += sub.delta || "";
+          pending.set(sid, buf);
+          scheduleFlush();
+          return;
+        }
+      }
+      flushSid(sid);
       const s = store();
 
       // ---- assistant message lifecycle ----
@@ -47,31 +114,6 @@ export function useChatEvents() {
         const sub = ev.assistantMessageEvent;
         const currentId = s.getCurrentAssistantId(sid);
         if (!sub || !currentId) return;
-
-        const appendToLastBlock = (blockType: "text" | "thinking", delta: string) => {
-          s.updateItem(sid, currentId, (it) => {
-            if (it.kind !== "assistant") return it;
-            const blocks = [...it.blocks];
-            let idx = -1;
-            for (let i = blocks.length - 1; i >= 0; i--) {
-              if (blocks[i].type === blockType) {
-                idx = i;
-                break;
-              }
-            }
-            if (idx === -1) {
-              blocks.push({ type: blockType, text: delta, isStreaming: true });
-            } else {
-              const b = blocks[idx] as {
-                type: typeof blockType;
-                text: string;
-                isStreaming?: boolean;
-              };
-              blocks[idx] = { type: blockType, text: b.text + delta, isStreaming: true };
-            }
-            return { ...it, blocks };
-          });
-        };
 
         const finishBlock = (blockType: "text" | "thinking") => {
           s.updateItem(sid, currentId, (it) =>
@@ -94,9 +136,6 @@ export function useChatEvents() {
                 : it,
             );
             return;
-          case "text_delta":
-            appendToLastBlock("text", sub.delta || "");
-            return;
           case "text_end":
             finishBlock("text");
             return;
@@ -109,9 +148,6 @@ export function useChatEvents() {
                   }
                 : it,
             );
-            return;
-          case "thinking_delta":
-            appendToLastBlock("thinking", sub.delta || "");
             return;
           case "thinking_end":
             finishBlock("thinking");
@@ -173,6 +209,7 @@ export function useChatEvents() {
     };
 
     const onDone = (data: { sessionId: string }) => {
+      flushSid(data.sessionId);
       const s = store();
       s.setStreaming(data.sessionId, false);
       const cur = s.getCurrentAssistantId(data.sessionId);
@@ -185,6 +222,7 @@ export function useChatEvents() {
     };
 
     const onError = (data: { sessionId: string; error: string }) => {
+      flushSid(data.sessionId);
       const s = store();
       s.addItem(data.sessionId, {
         kind: "system",
@@ -283,6 +321,7 @@ export function useChatEvents() {
     socket.on("session:thinkingLevelChanged", onThinkingChanged);
 
     return () => {
+      if (flushTimer != null) clearTimeout(flushTimer);
       socket.off("chat:event", onEvent);
       socket.off("chat:done", onDone);
       socket.off("chat:error", onError);
