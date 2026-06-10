@@ -12,6 +12,7 @@
 // HTTP is the existing IPC the deployer already uses to bounce the web; we
 // reuse the same channel rather than inventing pipes/sockets.
 
+import { timingSafeEqual } from "node:crypto";
 import type { Application, NextFunction, Request, Response } from "express";
 import type { RepairSessionService } from "../services/repair-session.js";
 
@@ -28,11 +29,14 @@ const TOKEN_HEADER = "x-mca-deploy-token";
  * Constant-time comparison so a misbehaving client can't time the rejection
  * to discover the token. node:crypto.timingSafeEqual requires equal-length
  * buffers, so we short-circuit the length check first.
+ *
+ * Imported at the top of the module — NOT via require(), because this
+ * workspace is `"type": "module"` and CommonJS require is undefined at
+ * runtime. (vitest provides a require shim which is why this wasn't caught
+ * by unit tests; we now have a smoke-runtime regression in mind.)
  */
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { timingSafeEqual } = require("node:crypto") as typeof import("node:crypto");
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 

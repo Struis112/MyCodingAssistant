@@ -165,20 +165,57 @@ export function createApiProbes(deps: ApiDeployDeps): ServiceProbes {
 /**
  * Activatable that bounces the NSSM-managed API service.
  *
- * Why detached: the API restart will eventually terminate connections to the
- * deployer, so the spawn must outlive its parent stdio. We don't wait for
- * `nssm restart` to return because NSSM's stop-then-start can take a few
- * seconds; the pipeline's `verify` step covers the actual "is it up?" check
- * via readiness + smoke. We DO wait for `nssm restart`'s exit code, though,
- * so a typo / missing service surfaces as an `activate` failure (the
- * controller then rolls back).
+ * Implementation: split stop + start (NOT `nssm restart`). NSSM's single-shot
+ * `restart` is too strict about transient state — if the service is mid-
+ * SERVICE_START_PENDING (which happens routinely when the OS just brought it
+ * up), NSSM aborts with "Unexpected status SERVICE_START_PENDING in response
+ * to START control" and we fail activate. The fix is to do the two halves
+ * explicitly and tolerate "already stopped" / "already running" on each:
+ * we don't actually CARE if the start nudge no-ops because the pipeline's
+ * `verify` step probes readiness anyway. The activate step's real job is
+ * "make sure a restart attempt happened"; verify decides if it stuck.
+ *
+ * Failure (return non-ok) is reserved for true terminal cases: NSSM not
+ * found, service name doesn't exist.
  */
 export function createApiActivatable(deps: ApiDeployDeps): Activatable {
   const run = deps.run ?? defaultRun;
+  // Tolerated NSSM stderr fragments. Match against decoded-UTF16 (Windows
+  // services often emit double-byte) by stripping NUL bytes first.
+  const isTolerable = (logs: string): boolean => {
+    // NSSM emits UTF-16 on Windows; strip the inter-byte NULs before matching
+    // so substrings like 'SERVICE_START_PENDING' actually find each other.
+    // String.replaceAll avoids the no-control-regex lint rule.
+    const norm = logs.replaceAll("\u0000", "").toLowerCase();
+    return (
+      norm.includes("service has not been started") ||
+      norm.includes("start_pending") ||
+      norm.includes("stop_pending") ||
+      norm.includes("operation completed successfully")
+    );
+  };
+  // Returns ok:true if the call succeeded OR if it failed in a way we know is
+  // safe to ignore during a bounce.
+  const nssmTolerant = async (verb: "stop" | "start"): Promise<ApiDeployRunResult> => {
+    const r = await run(deps.nssmPath, [verb, deps.serviceName], deps.repoDir);
+    if (r.ok) return r;
+    if (isTolerable(r.logs)) return { ok: true, logs: `[tolerated] ${r.logs}` };
+    return r;
+  };
   return {
     restart: async () => {
-      const r = await run(deps.nssmPath, ["restart", deps.serviceName], deps.repoDir);
-      if (!r.ok) throw new Error(`nssm restart ${deps.serviceName} failed:\n${r.logs}`);
+      const stop = await nssmTolerant("stop");
+      if (!stop.ok) {
+        throw new Error(`nssm stop ${deps.serviceName} failed:\n${stop.logs}`);
+      }
+      // Brief pause so the SCM finishes the state transition before we ask
+      // for START. Without this, back-to-back stop/start can race on slow
+      // shutdowns and re-trip the SERVICE_*_PENDING guard.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      const start = await nssmTolerant("start");
+      if (!start.ok) {
+        throw new Error(`nssm start ${deps.serviceName} failed:\n${start.logs}`);
+      }
     },
   };
 }

@@ -178,8 +178,20 @@ async function rebuildAndRestartApi(): Promise<void> {
   // doesn't strand the system after a partial rollback.
   const built = await run("npm", ["run", "build", "--workspace=@mca/server"], REPO_DIR);
   if (!built.ok) log(`rollback API build warning: ${built.logs}`);
-  const restart = await run(NSSM_PATH, ["restart", API_SERVICE_NAME], REPO_DIR);
-  if (!restart.ok) log(`rollback API restart warning: ${restart.logs}`);
+  // Same stop/start split as api-deploy.ts: `nssm restart` is too strict
+  // about transient SERVICE_*_PENDING states and aborts on the routine
+  // mid-transition race. Stop + sleep + start tolerates that.
+  // NSSM emits UTF-16 — strip NULs before matching benign-state substrings.
+  const stripNul = (s: string) => s.replaceAll("\u0000", "");
+  const stop = await run(NSSM_PATH, ["stop", API_SERVICE_NAME], REPO_DIR);
+  if (!stop.ok && !/start|stopped|completed/i.test(stripNul(stop.logs))) {
+    log(`rollback API stop warning: ${stop.logs}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  const start = await run(NSSM_PATH, ["start", API_SERVICE_NAME], REPO_DIR);
+  if (!start.ok && !/start|running|completed/i.test(stripNul(start.logs))) {
+    log(`rollback API start warning: ${start.logs}`);
+  }
 }
 
 function makeComposedStore(): KnownGoodStore {

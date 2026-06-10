@@ -47,21 +47,48 @@ describe("createApiProbes", () => {
 });
 
 describe("createApiActivatable", () => {
-  it("invokes nssm restart <serviceName>", async () => {
+  it("invokes nssm stop + start (NOT restart) so transient state races don't fail activate", async () => {
     const run = vi.fn(async () => ({ ok: true, logs: "" }));
     const act = createApiActivatable(makeDeps({ run }));
     await act.restart();
-    expect(run).toHaveBeenCalledWith(
-      "C:/repo/tools/nssm/nssm.exe",
-      ["restart", "MyCodingAssistant"],
-      "C:/repo",
-    );
+    // Two calls, in order: stop then start.
+    const calls = run.mock.calls.map((c) => (c as unknown as [string, string[], string])[1]);
+    expect(calls).toEqual([
+      ["stop", "MyCodingAssistant"],
+      ["start", "MyCodingAssistant"],
+    ]);
   });
 
-  it("throws when nssm restart fails so the controller rolls back", async () => {
-    const run = vi.fn(async () => ({ ok: false, logs: "service not found" }));
+  it("tolerates 'service not started' on the stop step", async () => {
+    const run = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "stop") {
+        return { ok: false, logs: "MyCodingAssistant: STOP: The service has not been started." };
+      }
+      return { ok: true, logs: "" };
+    });
     const act = createApiActivatable(makeDeps({ run }));
-    await expect(act.restart()).rejects.toThrow(/nssm restart MyCodingAssistant failed/);
+    // Should NOT throw — stop "already stopped" is benign during a bounce.
+    await expect(act.restart()).resolves.toBeUndefined();
+  });
+
+  it("tolerates SERVICE_START_PENDING on the start step (the real-world NSSM race)", async () => {
+    const run = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "start") {
+        return {
+          ok: false,
+          logs: "MyCodingAssistant: Unexpected status SERVICE_START_PENDING in response to START control.",
+        };
+      }
+      return { ok: true, logs: "" };
+    });
+    const act = createApiActivatable(makeDeps({ run }));
+    await expect(act.restart()).resolves.toBeUndefined();
+  });
+
+  it("throws on a truly fatal NSSM failure (service doesn't exist)", async () => {
+    const run = vi.fn(async () => ({ ok: false, logs: "Can't open service! OpenService(): 1060" }));
+    const act = createApiActivatable(makeDeps({ run }));
+    await expect(act.restart()).rejects.toThrow(/nssm stop MyCodingAssistant failed/);
   });
 });
 
