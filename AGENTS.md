@@ -33,3 +33,6 @@
 - A project-local pi extension at `.pi/extensions/github.ts` registers a read-only `github` tool that wraps the authenticated `gh` CLI: list/search repos, read remote files without cloning, view issues/PRs. The machine's `gh` is logged in as `Struis112` (scopes: `repo`, `read:org`, `gist`).
 - Auto-discovered from `.pi/extensions/`; run `/reload` to activate in a running session. `.pi/` is gitignored, so the file is tracked via `git add -f`.
 - **Read-only by design** — no shell passthrough, no writes. For write operations (rename a repo, set branch protection, open a PR, etc.) call `gh` directly via bash.
+
+<!-- bootstrap-race verification ping 2026-06-10 — commit triggers the deploy
+     gate with new lock+retry on both processes. Trivial; safe to revert. -->
