@@ -427,14 +427,27 @@ function main(): void {
     onCommit: (sha) => void runDeploy(sha),
   });
   trigger.start();
-  process.on("SIGINT", () => {
+
+  // Keep the event loop alive. CommitTrigger.start()'s poll interval is
+  // .unref()'d for test ergonomics, so without this keepalive the deployer
+  // process exits immediately after main() returns — NSSM then restarts us
+  // in a tight loop. The keepalive is intentionally a no-op heartbeat:
+  // it costs nothing, it shows up in tracing as proof of life, and it makes
+  // the "why is this process still alive?" question trivial to answer.
+  const heartbeat = setInterval(() => {
+    /* no-op: this interval exists solely to keep the event loop alive. */
+  }, 60_000);
+
+  const shutdown = (signal: string) => {
+    log(`received ${signal} — stopping`);
     trigger.stop();
+    clearInterval(heartbeat);
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    trigger.stop();
-    process.exit(0);
-  });
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // Windows: NSSM's default stop sends a console Ctrl+Break, surfaced as SIGBREAK.
+  process.on("SIGBREAK", () => shutdown("SIGBREAK"));
 }
 
 main();
