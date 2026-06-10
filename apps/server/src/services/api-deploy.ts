@@ -60,6 +60,10 @@ export interface ApiDeployDeps {
   stabilityWindowMs?: number;
   /** Probe interval override (default 3s). */
   probeIntervalMs?: number;
+  /** How long to wait for /healthz=200 after nssm start (default 60s). */
+  readyTimeoutMs?: number;
+  /** Poll interval while waiting for ready (default 1s). */
+  readyProbeIntervalMs?: number;
 }
 
 // ---- default external-effect implementations ----
@@ -175,11 +179,29 @@ export function createApiProbes(deps: ApiDeployDeps): ServiceProbes {
  * `verify` step probes readiness anyway. The activate step's real job is
  * "make sure a restart attempt happened"; verify decides if it stuck.
  *
- * Failure (return non-ok) is reserved for true terminal cases: NSSM not
- * found, service name doesn't exist.
+ * Failure (throw) is reserved for true terminal cases: NSSM not found,
+ * service name doesn't exist, OR the API didn't become ready within
+ * `readyTimeoutMs` after start. The composite pipeline turns either into a
+ * rollback.
+ *
+ * Wait-for-ready: after `nssm start` exits we poll `/healthz` until the API
+ * actually serves a 200 (up to `readyTimeoutMs`, default 60s). This makes
+ * "activate returned" mean "the API is up and answering HTTP" — important
+ * because the composite pipeline's WEB.activate runs straight after API's
+ * and POSTs to /api/services/web/restart. Without the wait, the web POST
+ * hits an API that's still booting and the deploy parks (the 2026-06-10
+ * incident class).
  */
 export function createApiActivatable(deps: ApiDeployDeps): Activatable {
   const run = deps.run ?? defaultRun;
+  const httpStatus = deps.httpStatus ?? defaultHttpStatus;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const port = deps.apiPort;
+  // Generous on purpose: the SDK + supervised web bring-up can take a while
+  // on cold disk. Better to wait 60s for a healthy API than to roll back a
+  // perfectly good deploy because the SDK was 25s into a 30s init.
+  const readyTimeoutMs = deps.readyTimeoutMs ?? 60_000;
+  const readyProbeIntervalMs = deps.readyProbeIntervalMs ?? 1_000;
   // Tolerated NSSM stderr fragments. Match against decoded-UTF16 (Windows
   // services often emit double-byte) by stripping NUL bytes first.
   const isTolerable = (logs: string): boolean => {
@@ -202,6 +224,28 @@ export function createApiActivatable(deps: ApiDeployDeps): Activatable {
     if (isTolerable(r.logs)) return { ok: true, logs: `[tolerated] ${r.logs}` };
     return r;
   };
+  /**
+   * Poll /healthz until 200 or timeout. /healthz is intentionally minimal
+   * (no DB, no auth, no SDK call) so it answers as soon as httpServer.listen
+   * fires — a faithful "the API process is up" signal.
+   */
+  const waitForReady = async (): Promise<void> => {
+    const deadline = Date.now() + readyTimeoutMs;
+    let lastSeen: number | null = -1;
+    while (Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      const code = await httpStatus(port, "/healthz");
+      if (code === 200) return;
+      lastSeen = code;
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(readyProbeIntervalMs);
+    }
+    throw new Error(
+      `API did not become ready within ${Math.round(readyTimeoutMs / 1000)}s ` +
+        `(last /healthz status: ${lastSeen === null ? "no response" : lastSeen})`,
+    );
+  };
+
   return {
     restart: async () => {
       const stop = await nssmTolerant("stop");
@@ -211,11 +255,15 @@ export function createApiActivatable(deps: ApiDeployDeps): Activatable {
       // Brief pause so the SCM finishes the state transition before we ask
       // for START. Without this, back-to-back stop/start can race on slow
       // shutdowns and re-trip the SERVICE_*_PENDING guard.
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await sleep(1_500);
       const start = await nssmTolerant("start");
       if (!start.ok) {
         throw new Error(`nssm start ${deps.serviceName} failed:\n${start.logs}`);
       }
+      // Wait for the API to actually serve before declaring activate done.
+      // This is what serializes API.activate -> WEB.activate correctly:
+      // when this returns, /api/services/web/restart is guaranteed reachable.
+      await waitForReady();
     },
   };
 }

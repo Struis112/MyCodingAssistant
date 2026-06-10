@@ -16,6 +16,9 @@ function makeDeps(overrides: Partial<ApiDeployDeps> = {}): ApiDeployDeps {
     portListening: vi.fn(async () => true),
     httpStatus: vi.fn(async () => 200),
     sleep: () => Promise.resolve(),
+    // Tiny readiness timeout for tests so a failure case resolves in ms.
+    readyTimeoutMs: 100,
+    readyProbeIntervalMs: 10,
     ...overrides,
   };
 }
@@ -89,6 +92,35 @@ describe("createApiActivatable", () => {
     const run = vi.fn(async () => ({ ok: false, logs: "Can't open service! OpenService(): 1060" }));
     const act = createApiActivatable(makeDeps({ run }));
     await expect(act.restart()).rejects.toThrow(/nssm stop MyCodingAssistant failed/);
+  });
+
+  it("waits for /healthz=200 after start before returning", async () => {
+    let calls = 0;
+    const httpStatus = vi.fn(async () => {
+      // First two probes: API still booting (no response). Third: 200.
+      calls++;
+      if (calls < 3) return null;
+      return 200;
+    });
+    const act = createApiActivatable(makeDeps({ httpStatus, readyTimeoutMs: 200 }));
+    await expect(act.restart()).resolves.toBeUndefined();
+    expect(httpStatus).toHaveBeenCalledWith(7641, "/healthz");
+    // At least 3 calls (2 not-ready + 1 ready) — serializes activate properly.
+    expect((httpStatus as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("throws if /healthz never returns 200 within readyTimeoutMs", async () => {
+    const httpStatus = vi.fn(async () => null);
+    const act = createApiActivatable(makeDeps({ httpStatus, readyTimeoutMs: 50 }));
+    await expect(act.restart()).rejects.toThrow(/API did not become ready/);
+  });
+
+  it("throws on a persistent 5xx from /healthz (boot failure)", async () => {
+    const httpStatus = vi.fn(async () => 500);
+    const act = createApiActivatable(
+      makeDeps({ httpStatus, readyTimeoutMs: 30, readyProbeIntervalMs: 5 }),
+    );
+    await expect(act.restart()).rejects.toThrow(/last \/healthz status: 500/);
   });
 });
 
