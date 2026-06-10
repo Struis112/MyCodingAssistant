@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, FolderOpen, MessageSquare, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/lib/store";
@@ -218,19 +218,28 @@ function DeleteConfirm({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
+  // Programmatic focus on the safe-default (Cancel) avoids `autoFocus`.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onCancel}
-      role="presentation"
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop is a real <button> for accessibility (click + Enter/Space
+          both cancel). Visually it's the dimmer behind the dialog. */}
+      <button
+        type="button"
+        aria-label="Dismiss dialog"
+        onClick={onCancel}
+        className="absolute inset-0 w-full h-full cursor-default bg-black/50"
+      />
       <div
-        className="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-lg"
+        className="relative w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-lg"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-title"
         aria-describedby="delete-desc"
-        onClick={(e) => e.stopPropagation()}
       >
         <h2 id="delete-title" className="text-sm font-semibold text-card-foreground">
           Delete this chat?
@@ -240,7 +249,7 @@ function DeleteConfirm({
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button
-            autoFocus
+            ref={cancelRef}
             onClick={onCancel}
             className="px-3 py-1.5 text-sm rounded border border-border text-foreground hover:bg-muted transition-colors"
           >

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { Terminal } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useShallow } from "zustand/react/shallow";
@@ -237,7 +238,7 @@ function ChatHeader({
         title="Harness: Pi SDK"
         aria-label="Harness: Pi SDK"
       >
-        <img src="/pi-logo.svg" alt="" className="w-2.5 h-2.5" />
+        <Image src="/pi-logo.svg" alt="" width={10} height={10} className="w-2.5 h-2.5" />
       </span>
 
       {/* Anthropic usage limits (5-hour + weekly) — right after the logo */}

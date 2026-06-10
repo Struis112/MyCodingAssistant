@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@earendil-works/pi-coding-agent"],
   // apps/web -> repo root is two levels up.
   outputFileTracingRoot: path.join(__dirname, "..", ".."),
+  // Linting is owned by oxlint at the repo root (see .oxlintrc.json with the
+  // `nextjs` + `jsx-a11y` plugins). Skip Next's built-in ESLint pass during
+  // `next build` so we don't depend on eslint-config-next anymore.
+  eslint: { ignoreDuringBuilds: true },
 };
 
 export default nextConfig;

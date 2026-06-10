@@ -104,6 +104,7 @@ export function MessageFilterMenu({
             >
               <input
                 type="checkbox"
+                aria-label={opt.label}
                 checked={filters[opt.key]}
                 onChange={(e) => onChange({ ...filters, [opt.key]: e.target.checked })}
                 className="accent-primary w-3.5 h-3.5"

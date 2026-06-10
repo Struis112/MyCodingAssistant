@@ -120,6 +120,12 @@ export interface ConnectorManager {
   listProviders?(): ProviderInfo[];
   /** Optional: store an API key for a provider (then its models appear). */
   setProviderApiKey?(id: string, key: string): void;
+  /**
+   * Optional: query the provider's authoritative model list and add any newly
+   * offered models (and their effort/thinking levels) to the picker. Returns
+   * which ids were added.
+   */
+  syncLatestModels?(): Promise<import("./../services/model-sync.js").SyncResult>;
   getOrCreateSession(
     sessionId: string,
     options?: { sessionFile?: string; continueRecent?: boolean },

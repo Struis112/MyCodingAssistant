@@ -6,14 +6,26 @@
 // This file moved from `apps/server/src/services/pi-session.ts` as part of
 // the multi-connector refactor (Phase A). Behaviour is unchanged.
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
+import { join } from "node:path";
 import {
   AuthStorage,
   createAgentSession,
+  getAgentDir,
   ModelRegistry,
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import {
+  customEntryFor,
+  type LiveModel,
+  mergeIntoModelsJson,
+  type ModelsJson,
+  type ModelTemplate,
+  newModels,
+  type SyncResult,
+} from "../../services/model-sync.js";
 import type {
   AccountUsage,
   ProviderInfo,
@@ -327,6 +339,74 @@ export class PiSessionManager implements ConnectorManager {
       contextWindow: m.contextWindow,
       reasoning: m.reasoning,
     }));
+  }
+
+  /**
+   * Query Anthropic's authoritative model list and add any newly-offered models
+   * to the picker (written to models.json, merged into the built-in `anthropic`
+   * provider so existing OAuth is reused). New models inherit the latest known
+   * model's effort/thinking levels. Best-effort: returns an error string instead
+   * of throwing so the caller (schedule/endpoint) can log and move on.
+   */
+  async syncLatestModels(): Promise<SyncResult> {
+    const at = Date.now();
+    try {
+      const all = this.modelRegistry.getAll();
+      const template =
+        all.find((m) => m.provider === "anthropic" && m.id.includes("opus-4-5")) ??
+        all.find((m) => m.provider === "anthropic");
+      if (!template) {
+        return { added: [], totalOffered: 0, error: "no anthropic model to template from", at };
+      }
+
+      const auth = await this.modelRegistry.getApiKeyAndHeaders(template);
+      if (!auth.ok) return { added: [], totalOffered: 0, error: `auth: ${auth.error}`, at };
+      const headers: Record<string, string> = {
+        "anthropic-version": "2023-06-01",
+        ...(auth.headers ?? {}),
+      };
+      if (auth.apiKey) headers["x-api-key"] = auth.apiKey;
+
+      const res = await fetch("https://api.anthropic.com/v1/models?limit=100", { headers });
+      if (!res.ok)
+        return { added: [], totalOffered: 0, error: `/v1/models HTTP ${res.status}`, at };
+      const body = (await res.json()) as { data?: Array<{ id: string; display_name?: string }> };
+      const live: LiveModel[] = (body.data ?? []).map((m) => ({
+        id: m.id,
+        name: m.display_name || m.id,
+      }));
+
+      const fresh = newModels(
+        live,
+        all.map((m) => m.id),
+      );
+      if (fresh.length === 0) return { added: [], totalOffered: live.length, at };
+
+      const t = template as unknown as ModelTemplate;
+      const tmpl: ModelTemplate = {
+        reasoning: t.reasoning,
+        input: t.input,
+        contextWindow: t.contextWindow,
+        maxTokens: t.maxTokens,
+        cost: t.cost,
+        thinkingLevelMap: t.thinkingLevelMap,
+        compat: t.compat,
+      };
+      const entries = fresh.map((m) => customEntryFor(m, tmpl));
+
+      const path = join(getAgentDir(), "models.json");
+      const existing: ModelsJson = existsSync(path)
+        ? (JSON.parse(readFileSync(path, "utf8")) as ModelsJson)
+        : {};
+      writeFileSync(
+        path,
+        JSON.stringify(mergeIntoModelsJson(existing, "anthropic", entries), null, 2) + "\n",
+      );
+      this.modelRegistry.refresh();
+      return { added: fresh.map((m) => m.id), totalOffered: live.length, at };
+    } catch (err) {
+      return { added: [], totalOffered: 0, error: (err as Error).message, at };
+    }
   }
 
   /** Model providers the user can switch between + whether they're authed. */

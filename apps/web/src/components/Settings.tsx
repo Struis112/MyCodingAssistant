@@ -158,7 +158,10 @@ export function Settings() {
               <h2 className="text-xl font-semibold text-card-foreground">Appearance</h2>
             </div>
             <div>
-              <label className="block text-sm font-medium text-card-foreground mb-2">Theme</label>
+              {/* Section sub-heading, not a form label — the button below toggles
+                  the theme. Using <div> keeps the same visuals without misusing
+                  <label> (which jsx-a11y flags for missing htmlFor/control). */}
+              <div className="block text-sm font-medium text-card-foreground mb-2">Theme</div>
               <button
                 onClick={toggleTheme}
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
@@ -174,7 +177,8 @@ export function Settings() {
             <div className="mt-6 pt-6 border-t border-border">
               <div className="flex items-center gap-2 mb-2">
                 <Type className="w-4 h-4 text-primary" />
-                <label className="block text-sm font-medium text-card-foreground">Font</label>
+                {/* Section sub-heading, not a form label. */}
+                <div className="block text-sm font-medium text-card-foreground">Font</div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {FONT_CHOICES.map((f) => {
@@ -192,6 +196,7 @@ export function Settings() {
                         type="radio"
                         name="font"
                         value={f.id}
+                        aria-label={f.label}
                         checked={isSelected}
                         onChange={() => setFont(f.id)}
                         className="w-4 h-4"
@@ -244,6 +249,7 @@ export function Settings() {
                           type="radio"
                           name="model"
                           value={model.id}
+                          aria-label={model.name}
                           checked={isSelected}
                           onChange={() => handleModelChange(model)}
                           className="w-4 h-4"
@@ -299,6 +305,7 @@ export function Settings() {
                       type="radio"
                       name="thinking"
                       value={level}
+                      aria-label={`Thinking level: ${level}`}
                       checked={thinkingLevel === level}
                       onChange={() => handleThinkingLevelChange(level)}
                       className="w-4 h-4"

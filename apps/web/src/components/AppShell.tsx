@@ -302,14 +302,13 @@ export function AppShell() {
         Skip to content
       </a>
       {!isConnected && everConnected.current && (
-        <div
-          role="status"
+        <output
           aria-live="polite"
           className="fixed top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full border border-warning/40 bg-warning/10 px-3 py-1 text-xs font-medium text-warning shadow-sm"
         >
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
           Reconnecting…
-        </div>
+        </output>
       )}
       <Sidebar />
       <main id="main-content" tabIndex={-1} className="flex-1 flex flex-col overflow-hidden">

@@ -2,13 +2,18 @@ coverage:
   status:
     project:
       default:
+        # "auto" = don't let project coverage drop vs the base commit.
+        # `threshold` gives a small allowance for noise (e.g. coverage of a
+        # refactor that moves uncovered lines around).
         target: auto
-        threshold: 1%
-        informational: true
+        threshold: 0.5%
+        informational: false
     patch:
       default:
+        # Every PR's *new* lines must hit this bar.
         target: 70%
         threshold: 5%
+        informational: false
 
 comment:
   layout: "reach,diff,flags,files,footer"

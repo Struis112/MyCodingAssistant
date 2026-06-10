@@ -18,10 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node 22
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
 
       - name: Install
@@ -30,16 +30,17 @@ jobs:
       - name: Lint (oxlint)
         run: npm run lint
 
-      # Format check intentionally not run in CI: oxfmt 0.52 prints slightly
-      # different output on Linux vs Windows for the same source files (notably
-      # line-wrapping of long JSX text and indentation in nested try/catch).
-      # The pre-commit husky hook runs oxfmt locally before every commit, which
-      # keeps formatting tidy. Re-enable this step once oxfmt is platform-stable.
-      # - name: Format check (oxfmt)
-      #   run: npm run format:check
+      # CI is Linux-only, so oxfmt's historical Linux/Windows output drift
+      # doesn't apply here. The pre-commit husky hook (oxfmt + oxlint --fix)
+      # keeps local commits tidy; this step catches anything that slips past it.
+      - name: Format check (oxfmt)
+        run: npm run format:check
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Unused deps / exports (knip)
+        run: npm run lint:deps
 
       - name: Test with coverage
         run: npm run test:coverage
@@ -72,10 +73,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node 22
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
 
       - name: Install
@@ -132,7 +133,37 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=tag
 
-      - name: Build & push
+      # Build once into the runner's local Docker so Trivy can scan the exact
+      # bits we're about to publish. The follow-up `Build & push` step re-uses
+      # the GHA layer cache, so the second build is effectively free.
+      - name: Build (local, for scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Pick first tag for scan
+        id: scan-tag
+        run: |
+          first_tag=$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -n1)
+          echo "tag=${first_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy image scan (HIGH+CRITICAL fails)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.scan-tag.outputs.tag }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      - name: Build & push (scan passed)
         uses: docker/build-push-action@v6
         with:
           context: .
