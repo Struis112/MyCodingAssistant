@@ -371,7 +371,7 @@ app.post("/api/web/restart", async (_req, res) => {
 // ----- Model auto-sync -----
 // Keep the model picker current with the provider's authoritative list, so new
 // models (and their effort levels) show up without a manual edit or SDK update.
-const MODEL_SYNC_INTERVAL_MS = 12 * 60 * 60_000; // 12 hours
+const MODEL_SYNC_INTERVAL_MS = 15 * 60_000; // 15 minutes
 let lastModelSync: import("./services/model-sync.js").SyncResult | null = null;
 async function runModelSync(reason: string): Promise<void> {
   if (!piSessionManager.syncLatestModels) return;
@@ -561,7 +561,7 @@ httpServer.listen(PORT, HOST, () => {
   } else {
     console.log("[MCA Server] Web supervisor disabled (set MCA_SUPERVISE_WEB=1 to enable)");
   }
-  // Sync models shortly after boot, then every 12 hours. Unref'd so it never
+  // Sync models shortly after boot, then every 15 minutes. Unref'd so it never
   // holds the process open during shutdown.
   setTimeout(() => void runModelSync("startup"), 8_000).unref();
   setInterval(() => void runModelSync("interval"), MODEL_SYNC_INTERVAL_MS).unref();
@@ -590,6 +590,22 @@ async function shutdown() {
   try {
     io.disconnectSockets(true);
     io.close();
+  } catch {
+    /* best effort */
+  }
+
+  // Forcibly drop any remaining HTTP keep-alive connections. Without this,
+  // browser tabs / curl / the deployer's own probe sockets in keep-alive
+  // state count as "in flight" to httpServer.close() and prevent its
+  // callback from firing — which is exactly what made the watch-safe
+  // restart hit "Forced exit (graceful close timed out)" instead of the
+  // intended sub-second clean stop.
+  // closeIdleConnections + closeAllConnections were added in Node 18.2; we
+  // require >=22 elsewhere so they're always present, but we still optional-
+  // chain in case a test runner stubs httpServer with an older shape.
+  try {
+    httpServer.closeIdleConnections?.();
+    httpServer.closeAllConnections?.();
   } catch {
     /* best effort */
   }
