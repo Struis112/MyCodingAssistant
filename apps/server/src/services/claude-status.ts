@@ -1,12 +1,12 @@
 // Claude status feed
 //
 // Fetches https://status.claude.com/history.rss server-side (the browser can't,
-// due to CORS), keeps only incidents updated within the last 48h, and caches the
-// result so we never hammer the feed. The header shows nothing when this is
-// empty — it's a quiet, only-when-relevant indicator.
+// due to CORS), keeps only UNRESOLVED incidents updated within the last 6h, and
+// caches the result so we never hammer the feed. The header shows nothing when
+// this is empty — it's a quiet, only-when-relevant indicator.
 
 const STATUS_RSS_URL = process.env.MCA_CLAUDE_STATUS_URL || "https://status.claude.com/history.rss";
-const MAX_AGE_MS = 48 * 60 * 60_000; // 48 hours
+const MAX_AGE_MS = 6 * 60 * 60_000; // 6 hours
 const CACHE_TTL_MS = 5 * 60_000; // refresh at most every 5 min
 const MAX_ITEMS = 8;
 
@@ -39,9 +39,25 @@ function tag(block: string, name: string): string {
   return m ? decodeEntities(stripCdata(m[1])) : "";
 }
 
+const STATUS_KEYWORDS =
+  /\b(Resolved|Completed|Monitoring|Identified|Investigating|Update|In progress|Scheduled)\b/i;
+
 /**
- * Parse a Statuspage history.rss document into recent incidents. Pure (now +
- * maxAge are injectable) so it's unit-testable. Returns newest first, capped.
+ * True when the incident's LATEST update says it's over. Statuspage puts the
+ * newest update first in <description> ("<strong>Resolved</strong> - …"), so
+ * the first status keyword found is the current state. No description → not
+ * considered resolved (fail-open to showing the incident).
+ */
+export function isResolved(descriptionHtml: string): boolean {
+  const text = decodeEntities(stripCdata(descriptionHtml)).replace(/<[^>]+>/g, " ");
+  const m = text.match(STATUS_KEYWORDS);
+  return !!m && /^(Resolved|Completed)$/i.test(m[1]);
+}
+
+/**
+ * Parse a Statuspage history.rss document into recent, still-active incidents
+ * (resolved ones are dropped). Pure (now + maxAge are injectable) so it's
+ * unit-testable. Returns newest first, capped.
  */
 export function parseStatusRss(
   xml: string,
@@ -57,7 +73,8 @@ export function parseStatusRss(
     const t = pub ? Date.parse(pub) : NaN;
     if (!title || !Number.isFinite(t)) continue;
     const age = now - t;
-    if (age < 0 || age > maxAgeMs) continue; // skip future + anything older than 48h
+    if (age < 0 || age > maxAgeMs) continue; // skip future + anything older than the window
+    if (isResolved(tag(item, "description"))) continue; // it's over — not worth header space
     out.push({
       title,
       url: url || STATUS_RSS_URL,

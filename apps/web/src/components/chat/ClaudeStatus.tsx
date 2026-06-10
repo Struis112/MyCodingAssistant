@@ -6,8 +6,8 @@ import { useClaudeStatus } from "@/hooks/useClaudeStatus";
 import { cn } from "@/lib/utils";
 
 /**
- * Quiet Claude-status ticker for the header. Renders nothing unless there's a
- * status update within the last 48h (the server filters that). When the text is
+ * Quiet Claude-status ticker for the header. Renders nothing unless there's an
+ * UNRESOLVED incident updated within the last 6h (the server filters that). When the text is
  * wider than its slot it scrolls (marquee); otherwise it sits still. The slot is
  * sized by the caller (~50% of the leftover header space) and this fills it.
  */
@@ -46,7 +46,7 @@ export function ClaudeStatus({ className }: { className?: string }) {
       href={incidents[0]?.url || "https://status.claude.com"}
       target="_blank"
       rel="noopener noreferrer"
-      title={`Claude status — ${incidents.length} update${incidents.length > 1 ? "s" : ""} in the last 48h (opens status.claude.com)`}
+      title={`Claude status — ${incidents.length} active incident${incidents.length > 1 ? "s" : ""} (opens status.claude.com)`}
       className={cn(
         "group flex items-center gap-1.5 h-6 px-2 rounded-md border border-warning/40 bg-warning/10 text-warning text-xs overflow-hidden hover:bg-warning/20 transition-colors",
         className,
