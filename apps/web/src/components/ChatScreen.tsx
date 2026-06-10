@@ -12,6 +12,7 @@ import { MessageFilterMenu, isItemVisible } from "@/components/chat/Filters";
 import { useChatEvents } from "@/components/chat/useChatEvents";
 import { ChatTabs } from "@/components/chat/ChatTabs";
 import { ModelPicker, EffortPicker } from "@/components/chat/HeaderControls";
+import { ClaudeStatus } from "@/components/chat/ClaudeStatus";
 import { useUsage } from "@/hooks/useUsage";
 import { sessionTitle } from "@/components/chat/utils";
 import type { MessageFilters } from "@/components/chat/types";
@@ -250,7 +251,11 @@ function ChatHeader({
         <EffortPicker />
       </div>
 
-      <div className="flex-1" />
+      {/* Leftover space after the controls. The Claude-status ticker takes ~40%
+          of it (auto-shrinks on narrow screens) and shows only when relevant. */}
+      <div className="flex-1 min-w-0 flex items-center pl-3">
+        <ClaudeStatus className="w-2/5 min-w-0" />
+      </div>
       {isStreaming && <span className="text-xs text-warning animate-pulse">● Streaming...</span>}
       <MessageFilterMenu filters={filters} onChange={onFiltersChange} />
     </header>

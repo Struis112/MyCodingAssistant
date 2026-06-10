@@ -26,6 +26,7 @@ import {
 } from "./services/run-mode.js";
 import type { ServiceStatus } from "./services/service-supervisor.js";
 import { registerApiRoutes } from "./api/routes.js";
+import { getClaudeStatus } from "./services/claude-status.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 import { createCfAccessMiddleware, readCfAccessConfigFromEnv } from "./api/cf-access.js";
 import { installCfAccessSocketGuard } from "./websocket/cf-access-guard.js";
@@ -191,6 +192,11 @@ app.get("/health", (_req, res) => {
     timestamp: new Date().toISOString(),
     services: services.list(),
   });
+});
+
+// ----- Claude status (status.claude.com history feed, last 48h, cached) -----
+app.get("/api/claude-status", async (_req, res) => {
+  res.json(await getClaudeStatus());
 });
 
 // ----- Account usage (Anthropic 5-hour + weekly limits) -----

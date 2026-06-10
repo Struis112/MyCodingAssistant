@@ -5,6 +5,25 @@
 @layer components {
   /* Shared centered conversation column. Used by both the message list and
      the composer so they always share the same width. Change it here once. */
+  /* Claude-status ticker marquee: the text is duplicated, so shifting by -50%
+     loops seamlessly. Paused on hover so it's readable. Duration is set inline
+     per text length for a constant scroll speed. */
+  .cs-marquee {
+    animation: cs-marquee linear infinite;
+    will-change: transform;
+  }
+  .cs-marquee:hover {
+    animation-play-state: paused;
+  }
+  @keyframes cs-marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+
   .chat-column {
     /* Responsive, mobile-first. Near-full width on phones (gutters would just
        waste space), narrowing to the preferred 60% (20% gutters per side) on
