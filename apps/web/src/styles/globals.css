@@ -83,9 +83,29 @@
   src: url("/fonts/JetBrainsMono-BoldItalic.woff2") format("woff2");
 }
 
+/* JetBrains Mono Nerd Font — JetBrains Mono with coding ligatures preserved
+ * PLUS the Nerd Font icon glyphs (Powerline, Devicons, etc.). Shipped as TTF
+ * (the official patched build); larger than the woff2s above but self-hosted.
+ * SIL OFL (JetBrains Mono base) + Nerd Fonts patch (see JetBrainsMono-OFL.txt). */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMonoNerdFont-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMonoNerdFont-Bold.ttf") format("truetype");
+}
+
 /*
  * Mono font is switchable from Settings via a single class on <html>.
  * Default (no class) = Miosevka. `.font-jetbrains` = JetBrains Mono.
+ * `.font-nerd` = JetBrains Mono Nerd Font (ligatures + icon glyphs).
  * Everything (body + Tailwind `font-mono`) reads this one variable.
  */
 :root {
@@ -93,6 +113,11 @@
 }
 .font-jetbrains {
   --font-mono: "JetBrains Mono", "Miosevka", "Fira Code", Consolas, ui-monospace, monospace;
+}
+.font-nerd {
+  --font-mono:
+    "JetBrainsMono Nerd Font", "JetBrains Mono", "Miosevka", "Fira Code", Consolas, ui-monospace,
+    monospace;
 }
 
 /*
