@@ -122,7 +122,32 @@ function portListening(port: number): Promise<boolean> {
   });
 }
 
+// ----- web serve-profile gate -----
+// In dev/hybrid run modes the web is served by `next dev`, which compiles the
+// committed source on the fly AND owns `apps/web/.next`. Running a production
+// `next build` into that same directory corrupts the live dev server (ENOENT
+// routes-manifest.json → every page 500s), and bouncing it is pointless — Fast
+// Refresh already serves new code. So: in dev profile, deploys (and rollbacks)
+// must not build or restart the web. Authoritative source: the API service's
+// NSSM AppParameters (same thing the Run-mode switcher writes). Checked per
+// call — the mode can change at runtime. Fail-open to prod behavior.
+async function webIsDevProfile(): Promise<boolean> {
+  try {
+    const r = await run(NSSM_PATH, ["get", API_SERVICE_NAME, "AppParameters"], REPO_DIR);
+    const params = r.logs.replaceAll("\u0000", ""); // NSSM emits UTF-16
+    if (params.includes("start-prod.js")) return false;
+    if (params.includes("start-dev-supervised") || /tsx.+watch/i.test(params)) return true;
+  } catch {
+    /* fall through */
+  }
+  return false; // unknown → assume prod (old behavior)
+}
+
 async function restartWebViaApi(): Promise<void> {
+  if (await webIsDevProfile()) {
+    log("web runs `next dev` (dev/hybrid mode) — skipping web restart, Fast Refresh serves it");
+    return;
+  }
   // Retry on transient connection failures: when watch-safe or NSSM is mid-
   // bouncing the API server, /api/services/web/restart momentarily returns
   // ECONNREFUSED. The cooperative bounce-lock SHOULD prevent overlap, but
@@ -166,6 +191,12 @@ async function typecheckWeb(): Promise<{ ok: boolean; logs: string }> {
 }
 
 async function buildWeb(): Promise<{ ok: boolean; logs: string }> {
+  if (await webIsDevProfile()) {
+    return {
+      ok: true,
+      logs: "web runs `next dev` (dev/hybrid mode) — skipped production build (it would corrupt the live .next)",
+    };
+  }
   const next = findBin("next/dist/bin/next");
   if (!next) return { ok: false, logs: "next binary not found" };
   return run(process.execPath, [next, "build"], WEB_DIR);
