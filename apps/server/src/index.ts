@@ -30,6 +30,11 @@ import { getClaudeStatus } from "./services/claude-status.js";
 import { listHealingEvents, recordHealingEvent } from "./services/healing-events.js";
 import { registerWebSocketHandlers } from "./websocket/handlers.js";
 import { createCfAccessMiddleware, readCfAccessConfigFromEnv } from "./api/cf-access.js";
+import {
+  createAccessKeyMiddleware,
+  installAccessKeySocketGuard,
+  resolveAccessKey,
+} from "./api/access-key.js";
 import { installCfAccessSocketGuard } from "./websocket/cf-access-guard.js";
 import { createAccessAuditLogger } from "./services/access-audit.js";
 import { resolveDeployToken } from "./services/deploy-token.js";
@@ -82,6 +87,15 @@ app.use(express.json());
 app.get("/healthz", (_req, res) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
+
+// ----- LAN access key gate -----
+// Anything NOT from this machine (loopback) must present the shared key.
+// The key lives in logs/mca-access-key.txt (or MCA_ACCESS_KEY env); browsers
+// store it once and send it as a header. Local services (deployer, probes)
+// pass automatically. Placed right after /healthz so liveness stays public.
+const accessKey = resolveAccessKey(path.join(PROJECT_ROOT, "logs", "mca-access-key.txt"));
+app.use(createAccessKeyMiddleware(accessKey));
+console.log("[access] LAN gate active — key file: logs/mca-access-key.txt");
 
 // ----- Cloudflare Access JWT enforcement -----
 // Off by default (dev). In prod, set:
@@ -526,13 +540,38 @@ io.on("connection", (socket) => {
 // Install the WebSocket-side guard BEFORE handlers register their listeners.
 // Same JWT verification as Express — without this, an upgrade could bypass
 // the HTTP gate entirely.
+installAccessKeySocketGuard(io, accessKey);
 installCfAccessSocketGuard(io, cfAccessCfg);
 
 registerWebSocketHandlers(io, piSessionManager);
 
 // Forward service-status changes to all connected clients so the Services
-// screen updates live.
+// screen updates live. Also turn supervisor self-repair actions into healing
+// events: a crash-restart increments `restarts`, parking flips state to
+// "failed" — both belong in the Self-healing feed.
+const lastRestarts = new Map<string, number>();
+const lastStates = new Map<string, string>();
 services.on("status", (list: ServiceStatus[]) => {
+  for (const s of list) {
+    const prevRestarts = lastRestarts.get(s.name);
+    if (prevRestarts !== undefined && s.restarts > prevRestarts) {
+      recordHealingEvent({
+        source: "supervisor",
+        kind: "crash-restart",
+        message: `${s.name} crashed — self-repair restarted it (restart #${s.restarts}).`,
+      });
+    }
+    lastRestarts.set(s.name, s.restarts);
+    const prevState = lastStates.get(s.name);
+    if (prevState && prevState !== s.state && s.state === "failed") {
+      recordHealingEvent({
+        source: "supervisor",
+        kind: "parked",
+        message: `${s.name} hit its restart cap and was parked — manual restart needed.`,
+      });
+    }
+    lastStates.set(s.name, s.state);
+  }
   io.emit("services:status", list);
 });
 
@@ -547,6 +586,11 @@ const watchdog = new HealthWatchdog({
     console.warn(
       `[watchdog] '${req.service}' is ${req.state} — repair needed (unhealthy since ${new Date(req.since).toISOString()})`,
     );
+    recordHealingEvent({
+      source: "watchdog",
+      kind: "repair-needed",
+      message: `${req.service} stayed ${req.state} past the grace period — repair requested.`,
+    });
     io.emit("service:repairNeeded", req);
   },
 });

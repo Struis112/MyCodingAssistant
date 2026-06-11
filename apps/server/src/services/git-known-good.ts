@@ -33,6 +33,8 @@ export interface GitKnownGoodOptions {
   stagingRef?: string;
   /** Injectable git runner (tests). Default shells out to git. */
   run?: GitRunner;
+  /** Called with human-readable notes when rollback rescues work (logging). */
+  onNote?: (note: string) => void;
 }
 
 /** Default runner: `git -C <repoDir> <args...>`. */
@@ -56,12 +58,14 @@ export class GitKnownGoodStore implements KnownGoodStore {
   private live: string;
   private staging: string;
   private run: GitRunner;
+  private onNote: (note: string) => void;
 
   constructor(opts: GitKnownGoodOptions) {
     this.repoDir = opts.repoDir;
     this.live = opts.liveRef ?? "live";
     this.staging = opts.stagingRef ?? "staging";
     this.run = opts.run ?? makeDefaultRunner(this.repoDir);
+    this.onNote = opts.onNote ?? (() => {});
   }
 
   /** True when a ref/commit resolves. */
@@ -100,11 +104,32 @@ export class GitKnownGoodStore implements KnownGoodStore {
   }
 
   /**
-   * Roll the working tree back to the last known-good. Ensures we're on the
-   * staging branch and hard-resets it to `live`, so a subsequent rebuild/restart
-   * serves the known-good code.
+   * Roll the working tree back to the last known-good — WITHOUT destroying
+   * work. Two agents and a human share this working tree, and a hard reset
+   * once erased committed-but-unpromoted commits, so:
+   *  1. commits only reachable from `staging` are parked on a rescue branch,
+   *  2. uncommitted tracked changes are stashed (not obliterated),
+   * then we checkout + reset to `live` as before. Both rescues are best-effort
+   * notes, never blockers — the live system coming back up stays priority #1.
    */
   async rollback(): Promise<void> {
+    // 1. Rescue commits the reset would orphan (live..staging non-empty).
+    const ahead = await this.run(["rev-list", "--count", `${this.live}..${this.staging}`]);
+    if (ahead.code === 0 && parseInt(ahead.stdout.trim(), 10) > 0) {
+      const rescue = `rescue/${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
+      const r = await this.run(["branch", "-f", rescue, this.staging]);
+      if (r.code === 0) {
+        this.onNote(`rollback rescued ${ahead.stdout.trim()} commit(s) to branch ${rescue}`);
+      }
+    }
+    // 2. Park uncommitted tracked changes in a stash instead of erasing them.
+    const dirty = await this.run(["status", "--porcelain", "--untracked-files=no"]);
+    if (dirty.code === 0 && dirty.stdout.trim()) {
+      const s = await this.run(["stash", "push", "-m", "mca-rollback-rescue"]);
+      if (s.code === 0) {
+        this.onNote("rollback stashed uncommitted changes (see: git stash list)");
+      }
+    }
     await this.git(["checkout", "-f", this.staging], "rollback: checkout staging");
     await this.git(["reset", "--hard", this.live], "rollback: reset to live");
   }

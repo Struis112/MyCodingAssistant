@@ -83,6 +83,44 @@ describe.runIf(gitAvailable)("GitKnownGoodStore (real git, temp repo)", () => {
     expect(git(dir, "rev-parse", "live")).toBe(candidate);
   });
 
+  it("rollback() parks orphanable commits on a rescue branch", async () => {
+    const notes: string[] = [];
+    const store = new GitKnownGoodStore({ repoDir: dir, onNote: (n) => notes.push(n) });
+    await store.mark(); // live = v1
+
+    const doomed = commit(dir, "app.txt", "v2 would be erased", "v2");
+    await store.rollback();
+
+    // The commit is no longer on staging but IS reachable from a rescue branch.
+    const branches = git(dir, "branch", "--list", "rescue/*", "--format=%(refname:short)");
+    expect(branches).not.toBe("");
+    expect(git(dir, "rev-parse", branches.split("\n")[0])).toBe(doomed);
+    expect(notes.some((n) => n.includes("rescued 1 commit"))).toBe(true);
+  });
+
+  it("rollback() stashes uncommitted tracked changes instead of erasing them", async () => {
+    const notes: string[] = [];
+    const store = new GitKnownGoodStore({ repoDir: dir, onNote: (n) => notes.push(n) });
+    await store.mark();
+    commit(dir, "app.txt", "v2", "v2");
+
+    // Uncommitted WIP on a tracked file — previously destroyed by checkout -f.
+    writeFileSync(path.join(dir, "app.txt"), "WIP not yet committed");
+    await store.rollback();
+
+    const stashes = git(dir, "stash", "list");
+    expect(stashes).toContain("mca-rollback-rescue");
+    expect(notes.some((n) => n.includes("stashed"))).toBe(true);
+  });
+
+  it("rollback() with clean tree and no extra commits creates no rescue artifacts", async () => {
+    const store = new GitKnownGoodStore({ repoDir: dir });
+    await store.mark();
+    await store.rollback();
+    expect(git(dir, "branch", "--list", "rescue/*")).toBe("");
+    expect(git(dir, "stash", "list")).toBe("");
+  });
+
   it("full cycle: mark → bad candidate → rollback → good candidate → promote", async () => {
     const store = new GitKnownGoodStore({ repoDir: dir });
     await store.mark();

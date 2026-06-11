@@ -260,6 +260,11 @@ function makeComposedStore(): KnownGoodStore {
     repoDir: REPO_DIR,
     liveRef: LIVE_REF,
     stagingRef: STAGING_REF,
+    // Rescued work (rescue branch / stash) is worth surfacing: log + feed.
+    onNote: (note) => {
+      log(`known-good: ${note}`);
+      void postHealing("rescued-work", note);
+    },
   });
   return {
     mark: () => git.mark(),

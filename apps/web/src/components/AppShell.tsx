@@ -10,6 +10,11 @@ import { Sidebar } from "@/components/Sidebar";
 import { useAppStore, readPersistedUserPrefs, readPersistedTabs, type View } from "@/lib/store";
 import { useShallow } from "zustand/react/shallow";
 import { getSocket } from "@/lib/socket";
+import { AccessGate } from "@/components/AccessGate";
+import { installAccessKeyFetch } from "@/lib/access-key";
+
+// Attach the LAN access key to API fetches before any component fetches.
+installAccessKeyFetch();
 
 export function AppShell() {
   // Selective subscription (useShallow): the shell must NOT re-render on every
@@ -323,6 +328,7 @@ export function AppShell() {
           Reconnecting…
         </output>
       )}
+      <AccessGate />
       <Sidebar />
       <main id="main-content" tabIndex={-1} className="flex-1 flex flex-col overflow-hidden">
         {activeView === "chat" && <ChatScreen />}
