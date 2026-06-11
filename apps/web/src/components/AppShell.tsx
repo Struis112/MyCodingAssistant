@@ -116,10 +116,25 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [setActiveView]);
 
-  // Tab keyboard shortcuts: Alt+T new, Alt+W close active, Alt+Up/Down cycle.
-  // (Alt+Left/Right are the browser's back/forward, so we use Up/Down.)
+  // Tab keyboard shortcuts: Alt+T new, Alt+W close active, Alt+Up/Down cycle,
+  // plus Ctrl+Tab / Ctrl+Shift+Tab next/previous (the familiar convention).
+  // (Alt+Left/Right are the browser's back/forward, so we use Up/Down. Note:
+  // some browsers reserve Ctrl+Tab for their own tab switching and never let
+  // the page see it — Alt+Up/Down always works as the fallback.)
   useEffect(() => {
+    const cycle = (dir: 1 | -1) => {
+      const s = useAppStore.getState();
+      if (s.tabOrder.length < 2) return;
+      const idx = s.tabOrder.indexOf(s.activeSessionId);
+      const len = s.tabOrder.length;
+      s.switchTab(s.tabOrder[(idx + dir + len) % len]!);
+    };
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab" && e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        cycle(e.shiftKey ? -1 : 1);
+        return;
+      }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       const s = useAppStore.getState();
       const k = e.key.toLowerCase();
@@ -131,12 +146,8 @@ export function AppShell() {
         e.preventDefault();
         s.closeTab(s.activeSessionId);
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (s.tabOrder.length < 2) return;
         e.preventDefault();
-        const idx = s.tabOrder.indexOf(s.activeSessionId);
-        const len = s.tabOrder.length;
-        const next = e.key === "ArrowDown" ? (idx + 1) % len : (idx - 1 + len) % len;
-        s.switchTab(s.tabOrder[next]!);
+        cycle(e.key === "ArrowDown" ? 1 : -1);
       }
     };
     window.addEventListener("keydown", onKey);

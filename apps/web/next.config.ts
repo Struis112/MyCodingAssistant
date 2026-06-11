@@ -10,13 +10,18 @@ import path from "node:path";
 // scrambles the dev React Client Manifest, and the page renders as 500.
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Build-output isolation: `next dev` (hybrid mode) serves live from .next,
+  // and a concurrent `next build` into the SAME dir corrupts it (the
+  // 2026-06-10 "routes-manifest missing / every page 500s" incident). Any
+  // production build must therefore set NEXT_DIST_DIR (e.g. .next-prod) so
+  // the two can never collide.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   serverExternalPackages: ["@earendil-works/pi-coding-agent"],
   // apps/web -> repo root is two levels up.
   outputFileTracingRoot: path.join(__dirname, "..", ".."),
   // Linting is owned by oxlint at the repo root (see .oxlintrc.json with the
-  // `nextjs` + `jsx-a11y` plugins). Skip Next's built-in ESLint pass during
-  // `next build` so we don't depend on eslint-config-next anymore.
-  eslint: { ignoreDuringBuilds: true },
+  // `nextjs` + `jsx-a11y` plugins). Next 16 dropped its built-in ESLint pass,
+  // so no opt-out is needed anymore.
 };
 
 export default nextConfig;
