@@ -2,10 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-export type Theme = "light" | "dark";
+import { THEME_COOKIE, THEMES, oppositeTheme, parseTheme, type Theme } from "./theme-shared";
 
-/** Cookie the server reads in layout.tsx to render the theme class on <html>. */
-export const THEME_COOKIE = "mca-theme";
+// Re-exported so existing importers keep working; canonical home is theme-shared.
+export { THEME_COOKIE, THEMES, type Theme };
 
 interface ThemeContextType {
   theme: Theme;
@@ -19,7 +19,7 @@ function readThemeCookie(): Theme | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(new RegExp(`(?:^|; )${THEME_COOKIE}=([^;]*)`));
   const value = match ? decodeURIComponent(match[1]) : null;
-  return value === "light" || value === "dark" ? value : null;
+  return parseTheme(value) ?? null;
 }
 
 function systemTheme(): Theme {
@@ -63,11 +63,8 @@ export function ThemeProvider({
   // element class-free so CSS `prefers-color-scheme` controls the colors.
   useEffect(() => {
     const root = document.documentElement;
-    if (!isExplicit) {
-      root.classList.remove("light", "dark");
-      return;
-    }
-    root.classList.remove("light", "dark");
+    root.classList.remove(...THEMES);
+    if (!isExplicit) return;
     root.classList.add(theme);
   }, [theme, isExplicit]);
 
@@ -78,8 +75,9 @@ export function ThemeProvider({
     document.cookie = `${THEME_COOKIE}=${newTheme}; path=/; max-age=31536000; SameSite=Lax`;
   }, []);
 
+  // Flips light↔dark WITHIN the current theme family (Tokyo or shadcn).
   const toggleTheme = useCallback(() => {
-    setTheme(theme === "dark" ? "light" : "dark");
+    setTheme(oppositeTheme(theme));
   }, [theme, setTheme]);
 
   const value = useMemo(() => ({ theme, toggleTheme, setTheme }), [theme, toggleTheme, setTheme]);

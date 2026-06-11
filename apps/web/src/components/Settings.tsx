@@ -2,6 +2,15 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useTheme } from "@/lib/theme";
+import type { Theme } from "@/lib/theme-shared";
+
+// Order mirrors the family pairs: Tokyo (original) first, then shadcn.
+const THEME_OPTIONS: ReadonlyArray<{ value: Theme; label: string }> = [
+  { value: "dark", label: "Tokyo · Dark" },
+  { value: "light", label: "Tokyo · Light" },
+  { value: "shadcn-dark", label: "shadcn · Dark" },
+  { value: "shadcn-light", label: "shadcn · Light" },
+];
 import { useFont, FONT_CHOICES } from "@/lib/font";
 import { getSocket } from "@/lib/socket";
 import { useAppStore } from "@/lib/store";
@@ -51,7 +60,7 @@ function ModelBadgePill({ kind }: { kind: ModelBadge }) {
 }
 
 export function Settings() {
-  const { theme, toggleTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { font, setFont } = useFont();
   const {
     activeSessionId: sessionId,
@@ -158,18 +167,29 @@ export function Settings() {
               <h2 className="text-xl font-semibold text-card-foreground">Appearance</h2>
             </div>
             <div>
-              {/* Section sub-heading, not a form label — the button below toggles
+              {/* Section sub-heading, not a form label — the buttons below set
                   the theme. Using <div> keeps the same visuals without misusing
                   <label> (which jsx-a11y flags for missing htmlFor/control). */}
               <div className="block text-sm font-medium text-card-foreground mb-2">Theme</div>
-              <button
-                onClick={toggleTheme}
-                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-              >
-                Switch to {theme === "dark" ? "Light" : "Dark"} Mode
-              </button>
+              <div className="grid grid-cols-2 gap-2 max-w-md" aria-label="Theme">
+                {THEME_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    aria-pressed={theme === opt.value}
+                    onClick={() => setTheme(opt.value)}
+                    className={`px-4 py-2 text-sm rounded-md border transition-colors text-left ${
+                      theme === opt.value
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-background text-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
               <p className="text-sm text-muted-foreground mt-2">
-                Current theme: {theme === "dark" ? "Dark" : "Light"}
+                Tokyo is the original colorful palette; shadcn is the monochrome zinc look from
+                ui.shadcn.com. All four meet WCAG 2.2 AAA contrast.
               </p>
             </div>
 

@@ -238,9 +238,74 @@
     --system-accent: var(--warning);
   }
 
-  /* First-visit fallback: follow the OS when no explicit theme class is set. */
+  /*
+   * shadcn theme pair — the stock shadcn/ui "zinc" look (ui.shadcn.com):
+   * monochrome neutral surfaces, near-black/white primary buttons. Status +
+   * syntax tokens (which shadcn doesn't define) use Tailwind zinc-compatible
+   * hues tuned to clear WCAG 2.2 AAA (7:1) on their backgrounds:
+   *   shadcn-dark:  #a1a1aa on #09090b = 7.7:1, #f87171 = 7.4:1 (AAA ✓)
+   *   shadcn-light: #52525b on #ffffff = 7.6:1, #991b1b = 8.3:1 (AAA ✓)
+   */
+  .shadcn-dark {
+    --background: 9 9 11; /* zinc-950 #09090b */
+    --foreground: 250 250 250; /* zinc-50  #fafafa */
+    --card: 24 24 27; /* zinc-900 #18181b */
+    --card-foreground: 250 250 250;
+    --muted: 39 39 42; /* zinc-800 #27272a */
+    --muted-foreground: 161 161 170; /* zinc-400 #a1a1aa (AAA) */
+    --accent: 39 39 42;
+    --accent-foreground: 250 250 250;
+    --primary: 250 250 250; /* white primary = the shadcn dark signature */
+    --primary-foreground: 24 24 27;
+    --border: 39 39 42;
+    --ring: 212 212 216; /* zinc-300 */
+    --success: 74 222 128; /* green-400 */
+    --warning: 251 191 36; /* amber-400 */
+    --error: 248 113 113; /* red-400 (AAA on zinc-950) */
+    --info: 147 197 253; /* blue-300 */
+    --arg: 253 186 116; /* orange-300 */
+    --syntax-keyword: 216 180 254; /* purple-300 */
+    --syntax-type: 94 234 212; /* teal-300 */
+
+    --user-accent: var(--info);
+    --assistant-accent: var(--success);
+    --tool-accent: var(--info);
+    --system-accent: var(--warning);
+  }
+
+  .shadcn-light {
+    --background: 255 255 255; /* white */
+    --foreground: 9 9 11; /* zinc-950 */
+    --card: 250 250 250; /* zinc-50 */
+    --card-foreground: 9 9 11;
+    --muted: 244 244 245; /* zinc-100 */
+    --muted-foreground: 82 82 91; /* zinc-600 #52525b (AAA) */
+    --accent: 244 244 245;
+    --accent-foreground: 24 24 27;
+    --primary: 24 24 27; /* near-black primary = the shadcn light signature */
+    --primary-foreground: 250 250 250;
+    --border: 228 228 231; /* zinc-200 */
+    --ring: 24 24 27;
+    --success: 22 101 52; /* green-800 */
+    --warning: 113 63 18; /* yellow-900 */
+    --error: 153 27 27; /* red-800 */
+    --info: 30 64 175; /* blue-800 */
+    --arg: 124 45 18; /* orange-900 */
+    --syntax-keyword: 107 33 168; /* purple-800 */
+    --syntax-type: 17 94 89; /* teal-800 */
+
+    --user-accent: var(--info);
+    --assistant-accent: var(--success);
+    --tool-accent: var(--info);
+    --system-accent: var(--warning);
+  }
+
+  /* First-visit fallback: follow the OS when no explicit theme class is set.
+   * Must exclude EVERY explicit theme class — this selector's specificity
+   * (0,3,0) beats a single class block, so without the :not()s it would
+   * override an explicitly chosen theme under an OS-light preference. */
   @media (prefers-color-scheme: light) {
-    :root:not(.dark):not(.light) {
+    :root:not(.dark):not(.light):not(.shadcn-dark):not(.shadcn-light) {
       --background: 243 244 248;
       --foreground: 25 33 80;
       --card: 251 251 253;

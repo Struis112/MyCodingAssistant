@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { ThemeProvider, THEME_COOKIE, type Theme } from "@/lib/theme";
+import { ThemeProvider } from "@/lib/theme";
+// Server-safe (no "use client") theme parsing — see theme-shared.ts.
+import { THEME_COOKIE, parseTheme, type Theme } from "@/lib/theme-shared";
 import { FontProvider } from "@/lib/font";
 // Imported from font-shared (NO "use client") so the server component
 // below can call parseFontChoice without Next.js treating it as a
@@ -28,7 +30,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // no class and let CSS `prefers-color-scheme` pick the colors (see globals.css).
   const jar = await cookies();
   const stored = jar.get(THEME_COOKIE)?.value;
-  const theme: Theme | undefined = stored === "light" || stored === "dark" ? stored : undefined;
+  const theme: Theme | undefined = parseTheme(stored);
 
   // Mono font choice (Miosevka default). Stamp the class on <html> server-side
   // so the first paint already uses the chosen font — no flash, same as theme.
