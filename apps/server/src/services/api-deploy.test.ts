@@ -9,8 +9,9 @@ import {
 function makeDeps(overrides: Partial<ApiDeployDeps> = {}): ApiDeployDeps {
   return {
     repoDir: "C:/repo",
-    serviceName: "MyCodingAssistant",
-    nssmPath: "C:/repo/tools/nssm/nssm.exe",
+    appName: "mca-server",
+    pm2Bin: "C:/repo/node_modules/pm2/bin/pm2",
+    nodeBin: "node",
     apiPort: 7641,
     run: vi.fn(async () => ({ ok: true, logs: "" })),
     portListening: vi.fn(async () => true),
@@ -50,51 +51,36 @@ describe("createApiProbes", () => {
 });
 
 describe("createApiActivatable", () => {
-  it("invokes nssm stop + start (NOT restart) so transient state races don't fail activate", async () => {
+  it("invokes `pm2 restart <appName>` via node + the pm2 bin", async () => {
     const run = vi.fn(async () => ({ ok: true, logs: "" }));
     const act = createApiActivatable(makeDeps({ run }));
     await act.restart();
-    // Two calls, in order: stop then start.
-    const calls = run.mock.calls.map((c) => (c as unknown as [string, string[], string])[1]);
-    expect(calls).toEqual([
-      ["stop", "MyCodingAssistant"],
-      ["start", "MyCodingAssistant"],
-    ]);
+    // Exactly one activation call: node <pm2Bin> restart mca-server, in repoDir.
+    expect(run).toHaveBeenCalledWith(
+      "node",
+      ["C:/repo/node_modules/pm2/bin/pm2", "restart", "mca-server"],
+      "C:/repo",
+    );
   });
 
-  it("tolerates 'service not started' on the stop step", async () => {
-    const run = vi.fn(async (_cmd: string, args: string[]) => {
-      if (args[0] === "stop") {
-        return { ok: false, logs: "MyCodingAssistant: STOP: The service has not been started." };
-      }
-      return { ok: true, logs: "" };
-    });
+  it("does NOT pass --update-env (PM2 must keep the app's ecosystem env)", async () => {
+    const run = vi.fn(async () => ({ ok: true, logs: "" }));
     const act = createApiActivatable(makeDeps({ run }));
-    // Should NOT throw — stop "already stopped" is benign during a bounce.
-    await expect(act.restart()).resolves.toBeUndefined();
+    await act.restart();
+    const args = (run.mock.calls[0] as unknown as [string, string[], string])[1];
+    expect(args).not.toContain("--update-env");
   });
 
-  it("tolerates SERVICE_START_PENDING on the start step (the real-world NSSM race)", async () => {
-    const run = vi.fn(async (_cmd: string, args: string[]) => {
-      if (args[0] === "start") {
-        return {
-          ok: false,
-          logs: "MyCodingAssistant: Unexpected status SERVICE_START_PENDING in response to START control.",
-        };
-      }
-      return { ok: true, logs: "" };
-    });
+  it("throws when `pm2 restart` fails (app unknown / daemon down)", async () => {
+    const run = vi.fn(async () => ({
+      ok: false,
+      logs: "[PM2][ERROR] Process or Namespace mca-server not found",
+    }));
     const act = createApiActivatable(makeDeps({ run }));
-    await expect(act.restart()).resolves.toBeUndefined();
+    await expect(act.restart()).rejects.toThrow(/pm2 restart mca-server failed/);
   });
 
-  it("throws on a truly fatal NSSM failure (service doesn't exist)", async () => {
-    const run = vi.fn(async () => ({ ok: false, logs: "Can't open service! OpenService(): 1060" }));
-    const act = createApiActivatable(makeDeps({ run }));
-    await expect(act.restart()).rejects.toThrow(/nssm stop MyCodingAssistant failed/);
-  });
-
-  it("waits for /healthz=200 after start before returning", async () => {
+  it("waits for /healthz=200 after restart before returning", async () => {
     let calls = 0;
     const httpStatus = vi.fn(async () => {
       // First two probes: API still booting (no response). Third: 200.

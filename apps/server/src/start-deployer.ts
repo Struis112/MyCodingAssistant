@@ -1,21 +1,29 @@
 // Self-Healing Deployer (Phase 2/4 entrypoint) — SEPARATE PROCESS
 //
-// See docs/architecture/self-healing-deploy.md. This is the small, rarely-
-// changed process that owns deploys so it can roll back the app even when the
-// app is broken. It runs as its OWN NSSM service (failure-domain isolation),
-// as Administrator (repo owner) so git works.
+// See docs/architecture/self-healing-deploy.md + pm2-single-runmode.md. This
+// is the small, rarely-changed process that owns deploys so it can roll back
+// the app even when the app is broken. It runs as its OWN PM2 app
+// (`mca-deployer`, failure-domain isolation), as Administrator (repo owner)
+// so git works.
 //
 // Scope: WEB + API (Phase 4 — "Bring `api` + `packages/shared` under the
-// contract"). The API is activated by bouncing its NSSM service; the deployer
-// is its OWN service so the bounce never kills the rollback path.
+// contract"). The API is activated by `pm2 restart mca-server`; the deployer
+// is its OWN PM2 app so the bounce never kills the rollback path. PM2 — not
+// the deployer — owns every process lifecycle; the deployer only ever asks
+// PM2 to restart.
+//
+// Web note (PM2 single run mode): web is ALWAYS `next dev` under PM2, so the
+// deployer never builds or restarts it — Fast Refresh picks up new source
+// automatically. The web pipeline is therefore verify-only (TCP + GET /); a
+// web TYPE error still fails the contract via the typecheck gate.
 //
 // Flow per commit on `staging` (composite across all children, in order):
-//   build  (api: tsc-emit | web: typecheck + next build)
+//   build  (api: tsc-emit | web: typecheck only)
 //   -> validate (api: vitest | web: built-in)
-//   -> activate (api FIRST: nssm restart   |   web SECOND: /api/services/web/restart)
-//   -> verify   (api: TCP + /healthz       |   web: TCP + /)
-//   -> PROMOTE, else ROLL BACK to known-good (git reset + rebuild web + restart
-//      both), feed logs to the AI, retry until stable or the 8h wall-clock
+//   -> activate (api: pm2 restart mca-server | web: no-op, Fast Refresh)
+//   -> verify   (api: TCP + /healthz         | web: TCP + /)
+//   -> PROMOTE, else ROLL BACK to known-good (git reset + rebuild + pm2 restart
+//      the API), feed logs to the AI, retry until stable or the 8h wall-clock
 //      budget is spent, then PARK (journal preserved).
 //
 // Order matters: API restarts first so a new server contract is in place
@@ -60,9 +68,21 @@ const STAGING_REF = process.env.MCA_STAGING_REF || "staging";
 const BUDGET_MS = parseInt(process.env.MCA_DEPLOY_BUDGET_MS || String(8 * 60 * 60 * 1000), 10);
 const LOG_DIR = path.join(REPO_DIR, "logs");
 const JOURNAL_PATH = path.join(LOG_DIR, "deploy-journal.json");
-// API NSSM service name + nssm.exe location — mirrors install-windows.ps1.
-const API_SERVICE_NAME = process.env.MCA_SERVICE_NAME || "MyCodingAssistant";
-const NSSM_PATH = process.env.MCA_NSSM_PATH || path.join(REPO_DIR, "tools", "nssm", "nssm.exe");
+// API PM2 app name + the pm2 bin to drive it — mirrors ecosystem.config.cjs.
+// pm2Bin is resolved from the repo so the daemon, the CLI we shell out to, and
+// scripts/pm2/verify.mjs all use the SAME repo-pinned pm2 (avoids CLI/daemon
+// version drift). NODE_BIN runs the pm2 bin JS cross-platform.
+const API_APP_NAME = process.env.MCA_PM2_API_APP || "mca-server";
+const NODE_BIN = process.execPath;
+const PM2_BIN =
+  process.env.MCA_PM2_BIN ||
+  (() => {
+    try {
+      return createRequire(path.join(REPO_DIR, "package.json")).resolve("pm2/bin/pm2");
+    } catch {
+      return path.join(REPO_DIR, "node_modules", "pm2", "bin", "pm2");
+    }
+  })();
 // Toggle: include the API in the deploy contract (Phase 4). Defaults ON; set
 // MCA_DEPLOY_INCLUDE_API=0 to fall back to web-only (e.g. while debugging).
 const INCLUDE_API = process.env.MCA_DEPLOY_INCLUDE_API !== "0";
@@ -122,61 +142,20 @@ function portListening(port: number): Promise<boolean> {
   });
 }
 
-// ----- web serve-profile gate -----
-// In dev/hybrid run modes the web is served by `next dev`, which compiles the
-// committed source on the fly AND owns `apps/web/.next`. Running a production
-// `next build` into that same directory corrupts the live dev server (ENOENT
-// routes-manifest.json → every page 500s), and bouncing it is pointless — Fast
-// Refresh already serves new code. So: in dev profile, deploys (and rollbacks)
-// must not build or restart the web. Authoritative source: the API service's
-// NSSM AppParameters (same thing the Run-mode switcher writes). Checked per
-// call — the mode can change at runtime. Fail-open to prod behavior.
-async function webIsDevProfile(): Promise<boolean> {
-  try {
-    const r = await run(NSSM_PATH, ["get", API_SERVICE_NAME, "AppParameters"], REPO_DIR);
-    const params = r.logs.replaceAll("\u0000", ""); // NSSM emits UTF-16
-    if (params.includes("start-prod.js")) return false;
-    if (params.includes("start-dev-supervised") || /tsx.+watch/i.test(params)) return true;
-  } catch {
-    /* fall through */
-  }
-  return false; // unknown → assume prod (old behavior)
-}
+// ----- web serve-profile (PM2 single run mode) -----
+// Under PM2 the web is ALWAYS `next dev` (see pm2-single-runmode.md §2): the
+// production `next build` is currently broken on this machine, and `next dev`
+// owns `apps/web/.next` + serves new source via Fast Refresh. So the deployer
+// never builds or restarts web — it only ever rebuilds/restarts the server.
+// Kept as a named constant (not a runtime probe) so the intent is explicit and
+// the call sites read the same as before.
+const WEB_IS_DEV_PROFILE = true;
 
 async function restartWebViaApi(): Promise<void> {
-  if (await webIsDevProfile()) {
-    log("web runs `next dev` (dev/hybrid mode) — skipping web restart, Fast Refresh serves it");
-    return;
-  }
-  // Retry on transient connection failures: when watch-safe or NSSM is mid-
-  // bouncing the API server, /api/services/web/restart momentarily returns
-  // ECONNREFUSED. The cooperative bounce-lock SHOULD prevent overlap, but
-  // defence-in-depth retry costs almost nothing and saves the deploy attempt
-  // when (not if) something else races. Backoff: 0.5/1/2/4s, max 4 attempts.
-  const callOnce = (): Promise<number | null> =>
-    new Promise<number | null>((resolve) => {
-      const req = http.request(
-        { host: "127.0.0.1", port: API_PORT, path: "/api/services/web/restart", method: "POST" },
-        (res) => {
-          res.resume();
-          resolve(res.statusCode ?? null);
-        },
-      );
-      req.on("error", () => resolve(null));
-      req.end();
-    });
-  let code: number | null = null;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    // eslint-disable-next-line no-await-in-loop
-    code = await callOnce();
-    if (code !== null) break;
-    if (attempt === 4) break;
-    const delayMs = 500 * 2 ** (attempt - 1);
-    log(`web restart endpoint unreachable (attempt ${attempt}/4) — retry in ${delayMs}ms`);
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  if (code !== 200) throw new Error(`web restart endpoint returned ${code ?? "no response"}`);
+  // No-op under PM2: web is `next dev`, Fast Refresh already serves the new
+  // (or rolled-back) source. PM2 owns the web process; the deployer must not
+  // restart it. Left as a function so the pipeline wiring is unchanged.
+  log("web runs `next dev` under PM2 — Fast Refresh serves new code; no web restart");
 }
 
 // ----- build/validate steps (web) -----
@@ -191,10 +170,13 @@ async function typecheckWeb(): Promise<{ ok: boolean; logs: string }> {
 }
 
 async function buildWeb(): Promise<{ ok: boolean; logs: string }> {
-  if (await webIsDevProfile()) {
+  // PM2 single run mode: web is `next dev`, which owns `.next` and recompiles
+  // on the fly. A production `next build` into the same dir would corrupt the
+  // live dev server, and is pointless. Always skip (typecheckWeb is the gate).
+  if (WEB_IS_DEV_PROFILE) {
     return {
       ok: true,
-      logs: "web runs `next dev` (dev/hybrid mode) — skipped production build (it would corrupt the live .next)",
+      logs: "web runs `next dev` under PM2 — skipped production build (Fast Refresh serves new code)",
     };
   }
   const next = findBin("next/dist/bin/next");
@@ -222,32 +204,21 @@ async function runForApi(
 
 // ----- known-good store composed with rebuild+restart on rollback -----
 async function rebuildAndRestartApi(): Promise<void> {
-  // API rollback: rebuild (tsc emits dist/) then bounce the NSSM service.
-  // Best-effort — we log warnings instead of throwing so a web-only failure
-  // doesn't strand the system after a partial rollback.
+  // API rollback: rebuild (tsc emits dist/) then `pm2 restart mca-server` so
+  // the rolled-back code is actually serving. Best-effort — we log warnings
+  // instead of throwing so a web-only failure doesn't strand the system after
+  // a partial rollback.
   const built = await run("npm", ["run", "build", "--workspace=@mca/server"], REPO_DIR);
   if (!built.ok) log(`rollback API build warning: ${built.logs}`);
-  // Same stop/start split as api-deploy.ts: `nssm restart` is too strict
-  // about transient SERVICE_*_PENDING states and aborts on the routine
-  // mid-transition race. Stop + sleep + start tolerates that.
-  // NSSM emits UTF-16 — strip NULs before matching benign-state substrings.
-  const stripNul = (s: string) => s.replaceAll("\u0000", "");
-  const stop = await run(NSSM_PATH, ["stop", API_SERVICE_NAME], REPO_DIR);
-  if (!stop.ok && !/start|stopped|completed/i.test(stripNul(stop.logs))) {
-    log(`rollback API stop warning: ${stop.logs}`);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
-  const start = await run(NSSM_PATH, ["start", API_SERVICE_NAME], REPO_DIR);
-  if (!start.ok && !/start|running|completed/i.test(stripNul(start.logs))) {
-    log(`rollback API start warning: ${start.logs}`);
-  }
-  // Wait for the rolled-back API to actually serve before returning. The
-  // rollback path's next step is restartWebViaApi(), which POSTs to the API
-  // — if we don't wait, that POST hits an unready API and the rollback
-  // logs cascade with ECONNREFUSEDs. Best-effort: a missed readiness here
-  // means the API didn't come back, which we log as a warning but don't
-  // re-throw — the controller will still park live on known-good and
-  // surface the situation in the journal.
+  // PM2 restart is reliable (no NSSM transient-state dance). A non-zero exit
+  // is logged but not thrown — the controller is already heading to PARK on
+  // known-good and we don't want to obscure the original failure reason.
+  const restart = await run(NODE_BIN, [PM2_BIN, "restart", API_APP_NAME], REPO_DIR);
+  if (!restart.ok) log(`rollback API pm2 restart warning: ${restart.logs}`);
+  // Wait for the rolled-back API to actually serve before returning, so any
+  // follow-on step (and the deployer's own repair HTTP calls) don't hit a
+  // still-booting API. Best-effort: a missed readiness here means the API
+  // didn't come back, which we log but don't re-throw.
   try {
     await waitForApiReady({ port: API_PORT, timeoutMs: 180_000 });
   } catch (err) {
@@ -305,8 +276,9 @@ function makeWebPipeline(): ServiceDeployPipeline {
 function makeApiPipeline(): ServiceDeployPipeline {
   return createApiDeployPipeline({
     repoDir: REPO_DIR,
-    serviceName: API_SERVICE_NAME,
-    nssmPath: NSSM_PATH,
+    appName: API_APP_NAME,
+    pm2Bin: PM2_BIN,
+    nodeBin: NODE_BIN,
     apiPort: API_PORT,
     run: runForApi,
     portListening: (p) => portListening(p),
@@ -597,8 +569,9 @@ function main(): void {
 
   // Keep the event loop alive. CommitTrigger.start()'s poll interval is
   // .unref()'d for test ergonomics, so without this keepalive the deployer
-  // process exits immediately after main() returns — NSSM then restarts us
-  // in a tight loop. The keepalive is intentionally a no-op heartbeat:
+  // process exits immediately after main() returns — PM2 would then restart
+  // us in a tight loop (and burn the max_restarts budget). The keepalive is
+  // intentionally a no-op heartbeat:
   // it costs nothing, it shows up in tracing as proof of life, and it makes
   // the "why is this process still alive?" question trivial to answer.
   const heartbeat = setInterval(() => {
@@ -613,7 +586,8 @@ function main(): void {
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-  // Windows: NSSM's default stop sends a console Ctrl+Break, surfaced as SIGBREAK.
+  // PM2 stops apps with SIGINT (then SIGKILL after kill_timeout). SIGBREAK is
+  // kept as a harmless extra for Windows console Ctrl+Break.
   process.on("SIGBREAK", () => shutdown("SIGBREAK"));
 }
 

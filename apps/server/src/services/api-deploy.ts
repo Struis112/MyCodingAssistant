@@ -7,15 +7,17 @@
 // `packages/shared/**`, which the server typechecks against) is gated by the
 // same contract as the web.
 //
-// Activation strategy: bounce the NSSM service. The deployer process is a
-// SEPARATE NSSM service (see start-deployer.ts) so it survives the API
-// restart and can keep driving the rollback path if verification fails. The
-// deployer must therefore have the same activation contract the web has:
+// Activation strategy: `pm2 restart mca-server`. The deployer is a SEPARATE
+// PM2 app (see start-deployer.ts / ecosystem.config.cjs) so restarting the
+// API never kills the deployer — it keeps driving the rollback path if
+// verification fails. PM2 (not the deployer) owns every process lifecycle;
+// the deployer only ever asks PM2 to restart. The deployer therefore has the
+// same activation contract the web has:
 //
 //   ServiceDeployPipeline
 //     ├─ build   : typecheck + `tsc -p apps/server` (emits dist/)
 //     ├─ validate: vitest run (server tests) — optional, skipped when not configured
-//     ├─ activate: nssm restart MyCodingAssistant
+//     ├─ activate: pm2 restart mca-server
 //     └─ verify  : readiness on PORT (TCP) + smoke GET /healthz
 //
 // All side-effecting calls (spawn, tcp connect, http GET) are injectable so
@@ -37,10 +39,12 @@ export interface ApiDeployRunResult {
 export interface ApiDeployDeps {
   /** Repository root (workspace root). */
   repoDir: string;
-  /** The NSSM service name to restart on activation. */
-  serviceName: string;
-  /** Path to nssm.exe (resolved by the caller, e.g. tools/nssm/nssm.exe). */
-  nssmPath: string;
+  /** The PM2 app name to restart on activation (e.g. "mca-server"). */
+  appName: string;
+  /** Path to the pm2 bin JS (run with node), e.g. node_modules/pm2/bin/pm2. */
+  pm2Bin: string;
+  /** Node binary used to run pm2 (default process.execPath). */
+  nodeBin?: string;
   /** Port the API listens on (for readiness + smoke). */
   apiPort: number;
   /** Override the `npm` binary (tests). Default "npm". */
@@ -60,7 +64,7 @@ export interface ApiDeployDeps {
   stabilityWindowMs?: number;
   /** Probe interval override (default 3s). */
   probeIntervalMs?: number;
-  /** How long to wait for /healthz=200 after nssm start (default 60s). */
+  /** How long to wait for /healthz=200 after pm2 restart (default 180s). */
   readyTimeoutMs?: number;
   /** Poll interval while waiting for ready (default 1s). */
   readyProbeIntervalMs?: number;
@@ -74,7 +78,7 @@ function defaultRun(cmd: string, args: string[], cwd: string): Promise<ApiDeploy
     const proc = spawn(cmd, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      // Resolve through cmd.exe on Windows so PATH lookups for `npm`/`nssm` work.
+      // Resolve through cmd.exe on Windows so PATH lookups for `npm`/`pm2` work.
       shell: process.platform === "win32",
     });
     proc.stdout?.on("data", (d) => (out += d.toString()));
@@ -119,8 +123,8 @@ function defaultHttpStatus(port: number, pathName: string): Promise<number | nul
  * Reusable: poll /healthz on `port` with `intervalMs` cadence until it
  * returns 200, or `timeoutMs` elapses. Throws with the last-seen status on
  * timeout. Used by createApiActivatable (activate path) and also by the
- * deployer's rollback path, which needs the same serialization guarantee
- * before talking to /api/services/web/restart.
+ * deployer's rollback path, which needs the same "the API is really serving
+ * again" guarantee after a pm2 restart before it moves on.
  */
 export async function waitForApiReady(opts: {
   port: number;
@@ -201,69 +205,35 @@ export function createApiProbes(deps: ApiDeployDeps): ServiceProbes {
 }
 
 /**
- * Activatable that bounces the NSSM-managed API service.
+ * Activatable that bounces the PM2-managed API app (`pm2 restart mca-server`).
  *
- * Implementation: split stop + start (NOT `nssm restart`). NSSM's single-shot
- * `restart` is too strict about transient state — if the service is mid-
- * SERVICE_START_PENDING (which happens routinely when the OS just brought it
- * up), NSSM aborts with "Unexpected status SERVICE_START_PENDING in response
- * to START control" and we fail activate. The fix is to do the two halves
- * explicitly and tolerate "already stopped" / "already running" on each:
- * we don't actually CARE if the start nudge no-ops because the pipeline's
- * `verify` step probes readiness anyway. The activate step's real job is
- * "make sure a restart attempt happened"; verify decides if it stuck.
+ * PM2 owns the process lifecycle; the deployer is a separate PM2 app, so this
+ * restart never touches the deployer itself. PM2's restart is reliable and
+ * has none of NSSM's transient-SERVICE_*_PENDING fragility, so there's no
+ * "tolerated state" matching to do: a non-zero exit from `pm2 restart` is a
+ * genuine failure (app name unknown, daemon down, ...) and we throw — the
+ * composite pipeline turns that into a rollback.
  *
- * Failure (throw) is reserved for true terminal cases: NSSM not found,
- * service name doesn't exist, OR the API didn't become ready within
- * `readyTimeoutMs` after start. The composite pipeline turns either into a
- * rollback.
- *
- * Wait-for-ready: after `nssm start` exits we poll `/healthz` until the API
- * actually serves a 200 (up to `readyTimeoutMs`, default 60s). This makes
- * "activate returned" mean "the API is up and answering HTTP" — important
- * because the composite pipeline's WEB.activate runs straight after API's
- * and POSTs to /api/services/web/restart. Without the wait, the web POST
- * hits an API that's still booting and the deploy parks (the 2026-06-10
- * incident class).
+ * Wait-for-ready: after `pm2 restart` exits (PM2 returns as soon as it has
+ * (re)spawned the process, NOT when the app is serving) we poll `/healthz`
+ * until the API actually answers 200 (up to `readyTimeoutMs`, default 180s).
+ * This makes "activate returned" mean "the API is up and answering HTTP", so
+ * the composite pipeline's verify step — and the deployer's repair HTTP calls
+ * — never hit a still-booting API (the 2026-06-10 incident class).
  */
 export function createApiActivatable(deps: ApiDeployDeps): Activatable {
   const run = deps.run ?? defaultRun;
   const httpStatus = deps.httpStatus ?? defaultHttpStatus;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const port = deps.apiPort;
-  // Generous on purpose. The window has to cover:
-  //   * dev-precheck (~2.5s tsc),
-  //   * SDK + supervised web bring-up (~5-7s typical),
-  //   * NSSM crash-throttle backoff (AppRestartDelay = 5s) for any boot
-  //     attempts that exit before AppThrottle (10s) — which can stack on a
-  //     cold disk or while watch-safe is also racing.
-  // 180s = comfortable margin for 5-6 throttled boot cycles. Better to wait
-  // 3 minutes for a healthy API than to roll back a perfectly good deploy
-  // because the SDK was 25s into a 30s init.
+  const nodeBin = deps.nodeBin ?? process.execPath;
+  // Generous on purpose. The window has to cover dev-precheck (~2.5s tsc),
+  // the SDK init (~5-7s typical), and PM2's own restart_delay backoff if the
+  // freshly-deployed code happens to crash-loop briefly. 180s = comfortable
+  // margin. Better to wait 3 minutes for a healthy API than to roll back a
+  // perfectly good deploy because the SDK was 25s into a 30s init.
   const readyTimeoutMs = deps.readyTimeoutMs ?? 180_000;
   const readyProbeIntervalMs = deps.readyProbeIntervalMs ?? 1_000;
-  // Tolerated NSSM stderr fragments. Match against decoded-UTF16 (Windows
-  // services often emit double-byte) by stripping NUL bytes first.
-  const isTolerable = (logs: string): boolean => {
-    // NSSM emits UTF-16 on Windows; strip the inter-byte NULs before matching
-    // so substrings like 'SERVICE_START_PENDING' actually find each other.
-    // String.replaceAll avoids the no-control-regex lint rule.
-    const norm = logs.replaceAll("\u0000", "").toLowerCase();
-    return (
-      norm.includes("service has not been started") ||
-      norm.includes("start_pending") ||
-      norm.includes("stop_pending") ||
-      norm.includes("operation completed successfully")
-    );
-  };
-  // Returns ok:true if the call succeeded OR if it failed in a way we know is
-  // safe to ignore during a bounce.
-  const nssmTolerant = async (verb: "stop" | "start"): Promise<ApiDeployRunResult> => {
-    const r = await run(deps.nssmPath, [verb, deps.serviceName], deps.repoDir);
-    if (r.ok) return r;
-    if (isTolerable(r.logs)) return { ok: true, logs: `[tolerated] ${r.logs}` };
-    return r;
-  };
   // Delegate to the shared helper so the activate path and the rollback
   // path use the same logic, with the same probe shape.
   const waitForReady = (): Promise<void> =>
@@ -277,21 +247,16 @@ export function createApiActivatable(deps: ApiDeployDeps): Activatable {
 
   return {
     restart: async () => {
-      const stop = await nssmTolerant("stop");
-      if (!stop.ok) {
-        throw new Error(`nssm stop ${deps.serviceName} failed:\n${stop.logs}`);
+      // Plain `pm2 restart <name>` (no --update-env): PM2 reuses the env it
+      // captured from the ecosystem file when the app was first started, so
+      // PORT/HOST/NODE_ENV are preserved. --update-env would clobber them
+      // with the DEPLOYER's environment, which lacks them.
+      const r = await run(nodeBin, [deps.pm2Bin, "restart", deps.appName], deps.repoDir);
+      if (!r.ok) {
+        throw new Error(`pm2 restart ${deps.appName} failed:\n${r.logs}`);
       }
-      // Brief pause so the SCM finishes the state transition before we ask
-      // for START. Without this, back-to-back stop/start can race on slow
-      // shutdowns and re-trip the SERVICE_*_PENDING guard.
-      await sleep(1_500);
-      const start = await nssmTolerant("start");
-      if (!start.ok) {
-        throw new Error(`nssm start ${deps.serviceName} failed:\n${start.logs}`);
-      }
-      // Wait for the API to actually serve before declaring activate done.
-      // This is what serializes API.activate -> WEB.activate correctly:
-      // when this returns, /api/services/web/restart is guaranteed reachable.
+      // Wait for the API to actually serve before declaring activate done, so
+      // verify (and the deployer's repair calls) never hit a booting API.
       await waitForReady();
     },
   };
