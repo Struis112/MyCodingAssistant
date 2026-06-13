@@ -1,7 +1,23 @@
 # Refactor plan: one run mode, fully on PM2
 
-Status: **PLAN — not yet implemented.** Supersedes the run-mode machinery in
-`run-mode.ts` and the NSSM coupling described in `self-healing-deploy.md §2a`.
+Status: **PLAN — approved, not yet implemented.** Supersedes the run-mode
+machinery in `run-mode.ts` and the NSSM coupling in `self-healing-deploy.md
+§2a`.
+
+**Confirmed decisions (2026-06-13):**
+
+1. Single mode = built server + `next dev` web (don't block on the prod build).
+2. Re-home the per-service repair hook into a PM2 monitor.
+3. Boot persistence is **cross-platform** (Linux is a target): native PM2
+   systemd on Linux; pm2-installer on Windows. See §5.
+4. Run as a non-superuser: Windows → Administrator (not LocalSystem); Linux →
+   a dedicated `mca` user.
+5. Keep the deployer a separate PM2 app.
+6. The deployer stops restarting web (Fast Refresh handles it); web restarts
+   only on dependency/config changes.
+
+**New requirement: cross-platform (Windows + Linux).** This is a reason FOR the
+refactor — NSSM is the main Windows lock-in we're removing. See §5a.
 
 ## 1. Goal
 
@@ -90,26 +106,52 @@ hook. Those move to two small in-process pieces:
 Net: the Services screen and healing feed keep working; only the _mechanism_
 under them changes from in-proc child processes to PM2-managed processes.
 
-## 5. Boot persistence & service account (Windows)
+## 5. Boot persistence & service account (cross-platform)
 
-PM2's native `pm2 startup` is unreliable on Windows. Options, recommended
-first:
+PM2 keeps processes alive while the box is up. On reboot, an OS-level ignition
+must start the PM2 daemon and run `pm2 resurrect` (which restores the list
+written by `pm2 save`). The app layer is identical on both OSes — only this
+ignition differs.
 
-- **A. One thin boot shim that runs `pm2 resurrect`.** Keep a _single_ NSSM
-  entry (or a Task Scheduler "At startup" task — we already use Task Scheduler
-  for backups) whose only job is `pm2 resurrect` after boot. Everything else is
-  PM2. Most reliable; smallest surface. (This is "fully on PM2" for process
-  management; the shim is just an ignition key.)
-- B. `pm2-installer` (community Windows service wrapper for the PM2 daemon).
-  More moving parts; another thing to trust.
+- **Linux (native, bulletproof):**
 
-Either way: `pm2 save` after first `pm2 start` to write the process list that
-`resurrect` restores.
+  ```
+  pm2 start ecosystem.config.cjs && pm2 save
+  pm2 startup systemd      # prints a sudo command; run it
+  ```
 
-**Service account:** do the LocalSystem → **Administrator** switch here (the
-project eval flagged LocalSystem as both a privilege and a profile-split
-problem). The PM2 daemon (and the boot shim) should run as Administrator so
-`~/.pi/agent` is a single profile and git/auth identity is correct.
+  Generates a `pm2-<user>.service` systemd unit that runs `pm2 resurrect` on
+  boot AND restarts the PM2 daemon itself if it dies. Nothing custom to write.
+
+- **Windows (no native `pm2 startup`):** use **pm2-installer**, which installs
+  the PM2 daemon as a Windows service (so the daemon self-heals too — matches
+  our self-healing standard). Alternative: a Task Scheduler "At startup" task
+  running `pm2 resurrect` as Administrator (minimal, but fires only once at
+  boot — won't relaunch a crashed daemon mid-session).
+
+Always `pm2 save` after the first `pm2 start` and after any change to the app
+set.
+
+**Service account (never a system superuser):**
+
+- Windows: **Administrator** (not LocalSystem) — fixes the profile split + the
+  over-privilege the eval flagged; `~/.pi/agent` becomes one profile.
+- Linux: a dedicated **`mca`** user (not root) owning the repo, `~/.pm2`, and
+  `~/.pi/agent`.
+
+## 5a. Cross-platform inventory (what's still OS-specific)
+
+The refactor removes the biggest Windows lock-in (NSSM). Remaining
+OS-conditional pieces to port or guard:
+
+| Artifact                                                | Today                         | Plan                                                                                                                         |
+| ------------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `tools/nssm/nssm.exe` + `scripts/service/*-windows.ps1` | Windows-only install          | Delete (PM2 + §5 ignition replace them).                                                                                     |
+| Deployer shelling to `nssm.exe`                         | Windows-only                  | Replaced by `pm2 reload` (cross-platform).                                                                                   |
+| `scripts/backup/backup-mca.ps1` + backup task           | PowerShell                    | Add a parallel `backup-mca.sh` (+ cron/systemd-timer) for Linux; keep `.ps1` for Windows. Same git-bundle + state-zip logic. |
+| LocalSystem profile paths                               | `C:\Windows\System32\...\.pi` | Gone once we run as Administrator/`mca` — single `~/.pi/agent`.                                                              |
+| `ecosystem.config.cjs`                                  | already `path.join`-based     | Stays portable; no `.exe` assumptions.                                                                                       |
+| Log rotation                                            | NSSM `AppRotateBytes`         | `pm2-logrotate` module (cross-platform) or ecosystem `max_size`.                                                             |
 
 ## 6. Phased migration (each phase reversible)
 
@@ -147,20 +189,15 @@ restart`; they never spawn. Idle-gate + deploy bounce-lock prevent overlap.
 - **Reverting mid-migration** → phases 1–3 leave NSSM installable; don't run
   the uninstall scripts until phase 5 passes a reboot test.
 
-## 8. Open questions (confirm before coding)
+## 8. Open questions — RESOLVED (2026-06-13)
 
-1. **Single-mode definition:** built-server + `next dev` web (my
-   recommendation), or block this refactor on fixing the prod `next build`
-   first?
-2. **Repair logic:** re-home the `ServiceSupervisor` repair hook into a PM2
-   monitor (§4), or rely on PM2 autorestart + the deployer's rollback alone and
-   drop the per-service repair hook?
-3. **Boot persistence:** thin NSSM/Task-Scheduler `pm2 resurrect` shim (A) or
-   `pm2-installer` (B)?
-4. **Service account:** switch LocalSystem → Administrator as part of this?
-5. **Deployer scope:** keep it a separate PM2 app (failure-domain isolation,
-   recommended), or fold deploy-triggering into the main server now that PM2
-   handles restarts?
-6. **Web on deploy:** confirm the deployer can stop touching web entirely
-   (Fast Refresh picks up changes), restarting it only on dependency/config
-   changes.
+All six confirmed; see the decisions block at the top. Summary: built-server +
+`next dev` web (1); re-home repair into a PM2 monitor (2); cross-platform boot —
+systemd on Linux, pm2-installer on Windows (3); non-superuser account —
+Administrator/`mca` (4); deployer stays a separate PM2 app (5); deployer stops
+touching web (6).
+
+Remaining items to confirm at execution time (not blockers):
+
+- Which OS is the _first_ migration target (Windows now, Linux later?).
+- `pm2-logrotate` vs ecosystem `max_size` for log rotation.
