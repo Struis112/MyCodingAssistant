@@ -557,10 +557,11 @@ async function runDeploy(sha: string): Promise<void> {
         `Deploy of ${sha.slice(0, 8)} promoted after ${result.attempts} attempt(s).`,
       );
     } else {
-      void postHealing(
-        "parked",
-        `Deploy of ${sha.slice(0, 8)} parked (${result.parkedReason}) — live stayed on known-good.`,
-      );
+      const parkMsg =
+        result.parkedReason === "build_env"
+          ? `Deploy of ${sha.slice(0, 8)} parked: broken build environment (missing toolchain) — NO rollback, tree left intact. Fix the environment, then retry.`
+          : `Deploy of ${sha.slice(0, 8)} parked (${result.parkedReason}) — live stayed on known-good.`;
+      void postHealing("parked", parkMsg);
       // PARK: live is on known-good; journal preserved for the human to resume.
       log(
         `PARKED (${result.parkedReason}) after ${result.attempts} attempt(s). ` +

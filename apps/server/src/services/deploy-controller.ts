@@ -116,7 +116,29 @@ export interface DeployResult {
   journal: AttemptRecord[];
   elapsedMs: number;
   /** Set when parked, so the UI can explain why. */
-  parkedReason?: "budget_exhausted" | "max_attempts" | "ai_gave_up";
+  parkedReason?: "budget_exhausted" | "max_attempts" | "ai_gave_up" | "build_env";
+}
+
+/**
+ * True when a step's logs indicate a broken build ENVIRONMENT (missing
+ * toolchain / dependency / executable) rather than a bad code candidate.
+ *
+ * Why this matters: on 2026-06-13 `NODE_ENV=production` pruned `typescript`,
+ * so every deploy's build failed with "Cannot find module .../tsc.js". The old
+ * controller treated that as a bad candidate and rolled back (`git reset
+ * --hard`) on each attempt — erasing committed work in a loop. A missing
+ * toolchain is NOT a bad commit: rolling back can't fix it (the rebuild fails
+ * too) and only risks destroying work. The right response is to PARK without
+ * touching git and let a human repair the environment.
+ */
+export function isEnvironmentFailure(logs: string): boolean {
+  return [
+    /Cannot find module/i,
+    /MODULE_NOT_FOUND/,
+    /is not recognized as an internal or external command/i,
+    /command not found/i,
+    /\bENOENT\b/,
+  ].some((re) => re.test(logs));
 }
 
 export class DeployController {
@@ -192,6 +214,14 @@ export class DeployController {
         return { outcome: "promoted", attempts: attempt, journal, elapsedMs: elapsed() };
       }
 
+      // Broken build ENVIRONMENT (missing toolchain), not a bad candidate:
+      // park WITHOUT rolling back. Rollback can't fix a missing tool and a
+      // hard reset would destroy work (the 2026-06-13 erasure loop). A human
+      // must repair the environment; the tree is left exactly as-is.
+      if (isEnvironmentFailure(failure.logs)) {
+        return this.park(journal, attempt, start, "build_env", false);
+      }
+
       // Candidate failed: get the LIVE system back on known-good immediately,
       // record the attempt, then ask the AI to produce the next candidate.
       this.setPhase("rolling_back", attempt, start);
@@ -231,10 +261,13 @@ export class DeployController {
     attempt: number,
     start: number,
     reason: DeployResult["parkedReason"],
+    rollbackFirst = true,
   ): Promise<DeployResult> {
     // Defensive: guarantee the live system is on a known-good version. Rollback
-    // is expected to be idempotent.
-    await this.knownGood.rollback();
+    // is expected to be idempotent. Skipped for a broken build ENVIRONMENT
+    // (build_env): touching git can't help and only risks destroying work —
+    // leave the tree exactly as the human left it.
+    if (rollbackFirst) await this.knownGood.rollback();
     this.setPhase("parked", attempt, start);
     journal.push({ attempt, outcome: "parked", at: this.now() });
     return {

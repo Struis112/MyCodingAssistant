@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DeployController,
+  isEnvironmentFailure,
   type DeployPipeline,
   type KnownGoodStore,
   type RepairAgent,
@@ -107,6 +108,46 @@ describe("DeployController — repair loop", () => {
     expect(result.attempts).toBe(3);
     // One rollback per failed activation (2), guaranteeing live safety.
     expect(knownGood.rollback).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isEnvironmentFailure", () => {
+  it("flags missing-toolchain failures", () => {
+    expect(isEnvironmentFailure("Error: Cannot find module '.../typescript/lib/tsc.js'")).toBe(
+      true,
+    );
+    expect(isEnvironmentFailure("code: 'MODULE_NOT_FOUND'")).toBe(true);
+    expect(isEnvironmentFailure("'tsc' is not recognized as an internal or external command")).toBe(
+      true,
+    );
+    expect(isEnvironmentFailure("bash: vitest: command not found")).toBe(true);
+    expect(isEnvironmentFailure("ENOENT: no such file or directory")).toBe(true);
+  });
+  it("does NOT flag genuine code/test failures", () => {
+    expect(isEnvironmentFailure("src/index.ts(5,1): error TS2304: Cannot find name 'foo'.")).toBe(
+      false,
+    );
+    expect(isEnvironmentFailure("AssertionError: expected 1 to equal 2")).toBe(false);
+  });
+});
+
+describe("DeployController — broken build environment", () => {
+  it("parks WITHOUT rolling back when the toolchain is missing", async () => {
+    const pipeline = makePipeline({
+      build: [fail("Error: Cannot find module '.../typescript/lib/tsc.js'")],
+    });
+    const knownGood = makeKnownGood();
+    const repair: RepairAgent = { attempt: vi.fn(async () => true) };
+    const ctrl = new DeployController({ pipeline, knownGood, repair });
+
+    const result = await ctrl.run();
+
+    expect(result.outcome).toBe("parked");
+    expect(result.parkedReason).toBe("build_env");
+    // The crucial guarantee: no rollback (no git reset) and no repair attempt.
+    expect(knownGood.rollback).not.toHaveBeenCalled();
+    expect(repair.attempt).not.toHaveBeenCalled();
+    expect(result.journal.map((j) => j.outcome)).toEqual(["parked"]);
   });
 });
 
